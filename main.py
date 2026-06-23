@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 
 from rating import DEFAULT_MAX_SCORES_PATH, build_ratings, write_rating_board
+from rating.constants import COMPLETION_BONUS
 
 
 def main() -> None:
@@ -23,8 +24,8 @@ def main() -> None:
     ratings = build_ratings(highscores_path, max_scores_path)
     ex_total, standard_total = write_rating_board(ratings, output_path)
 
-    print(f"Player EX Rating: {ex_total:.3f}")
-    print(f"Player Rating: {standard_total:.3f}")
+    print(f"Player EX Rating: {ex_total + COMPLETION_BONUS:.3f}")
+    print(f"Player Rating: {standard_total + COMPLETION_BONUS:.3f}")
     print(f"Wrote {output_path}")
 
 

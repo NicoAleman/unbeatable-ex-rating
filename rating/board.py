@@ -53,6 +53,7 @@ def format_rating_board_csv(
     writer = csv.writer(buffer)
 
     writer.writerow(["Player EX Rating", f"{ex_total:.3f}"])
+    writer.writerow(["(w/ 2.0 Completion)", f"{ex_total + COMPLETION_BONUS:.3f}"])
     writer.writerow(EX_BOARD_HEADERS)
     for rank, chart in enumerate(ex_top, 1):
         writer.writerow(_ex_row(rank, chart))

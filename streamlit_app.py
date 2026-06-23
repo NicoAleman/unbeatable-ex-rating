@@ -181,7 +181,7 @@ st.markdown(
             Unbeatable EX Rating
         </h1>
         <p style="margin: -0.55rem 0 0.5rem 0; font-size: 1.375rem; font-weight: 500; opacity: 0.9;">
-            A Community-Created EX Ranking System by FacadeNico
+            A Community-Created EX Rating System by FacadeNico
         </p>
         <hr style="margin: 0.5rem 0 1rem 0; border: none; border-top: 1px solid rgba(250, 250, 250, 0.2);">
     </div>
@@ -217,6 +217,7 @@ else:
                 st.warning("No rated charts found. Check that your file has Classic mode scores for known charts.")
             else:
                 ex_total, standard_total, ex_top, standard_top = get_rating_boards(ratings)
+                ex_with_completion = ex_total + COMPLETION_BONUS
                 standard_with_completion = standard_total + COMPLETION_BONUS
 
                 with st.container(
@@ -226,7 +227,11 @@ else:
                     vertical_alignment="top",
                 ):
                     with st.container(border=True, key="ex-rating-board"):
-                        board_header("EX Rating", f"{ex_total:.3f}")
+                        board_header(
+                            "EX Rating",
+                            f"{ex_with_completion:.3f}",
+                            "Includes +2.0 completion bonus",
+                        )
                         st.dataframe(
                             [
                                 {
