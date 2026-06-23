@@ -11,12 +11,15 @@
  * Behavior:
  * - New player names are added to the Approved tab immediately.
  * - Existing players can update only with a higher EX Rating (case-insensitive name match).
+ * - EX Rating values are stored at full precision for sorting and tie-breaking.
+ * - EX Rating cells use a 0.000 display format (three decimals shown, value unchanged).
  * - Every valid submission is also appended to the Pending tab as a log (duplicates allowed).
  */
 
 const SPREADSHEET_ID = '16fpprBB4ynYxYFgoqnAlqmUCvXiEqRz-LgvivjvK_J0';
 const APPROVED_TAB = 'Approved';
 const PENDING_TAB = 'Pending';
+const EX_RATING_DISPLAY_FORMAT = '0.000';
 
 function doPost(e) {
   try {
@@ -44,7 +47,7 @@ function doPost(e) {
     const columns = getColumns_(sheet);
     const rows = sheet.getDataRange().getValues();
     const existing = findPlayerRow_(rows, columns, player);
-    const submittedRating = roundRating_(exRating);
+    const submittedRating = exRating;
     let logResult = '';
     let response = null;
 
@@ -68,7 +71,9 @@ function doPost(e) {
           ').',
       };
     } else {
-      sheet.getRange(existing.rowIndex + 1, columns.rating + 1).setValue(submittedRating);
+      const ratingCell = sheet.getRange(existing.rowIndex + 1, columns.rating + 1);
+      ratingCell.setValue(submittedRating);
+      applyExRatingDisplayFormat_(ratingCell);
       if (columns.date >= 0) {
         sheet.getRange(existing.rowIndex + 1, columns.date + 1).setValue(dateAdded);
       }
@@ -139,7 +144,7 @@ function findPlayerRow_(rows, columns, playerName) {
     if (name.toLowerCase() === key) {
       return {
         rowIndex: i,
-        rating: roundRating_(Number(rows[i][columns.rating])),
+        rating: Number(rows[i][columns.rating]),
       };
     }
   }
@@ -160,6 +165,7 @@ function appendPlayer_(sheet, columns, player, rating, dateAdded) {
     normalized[i] = row[i] !== undefined ? row[i] : '';
   }
   sheet.appendRow(normalized);
+  applyExRatingDisplayFormat_(sheet.getRange(sheet.getLastRow(), columns.rating + 1));
 }
 
 function ensurePendingHeaders_(sheet) {
@@ -177,12 +183,13 @@ function appendSubmissionLog_(spreadsheet, player, rating, dateAdded, result) {
 
   ensurePendingHeaders_(pendingSheet);
   pendingSheet.appendRow([player, rating, dateAdded, result]);
+  applyExRatingDisplayFormat_(pendingSheet.getRange(pendingSheet.getLastRow(), 2));
 }
 
-function roundRating_(value) {
-  return Math.round(value * 1000) / 1000;
+function applyExRatingDisplayFormat_(range) {
+  range.setNumberFormat(EX_RATING_DISPLAY_FORMAT);
 }
 
 function formatRating_(value) {
-  return roundRating_(value).toFixed(3);
+  return Number(value).toFixed(3);
 }

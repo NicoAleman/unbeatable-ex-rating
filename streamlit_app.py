@@ -35,6 +35,8 @@ format_rating_board_csv = board_module.format_rating_board_csv
 player_ex_rating_with_completion = board_module.player_ex_rating_with_completion
 load_shared_ex_rankings = shared_rankings_module.load_shared_ex_rankings
 find_player_ranking = shared_rankings_module.find_player_ranking
+competition_ranks = shared_rankings_module.competition_ranks
+rankings_after_submission = shared_rankings_module.rankings_after_submission
 validate_rating_submission = shared_rankings_module.validate_rating_submission
 pending_submission_url = submissions_module.pending_submission_url
 submit_ranking = submissions_module.submit_ranking
@@ -173,6 +175,22 @@ st.markdown(
         margin: 0;
         height: 0;
     }}
+    .st-key-submit-ex-rating-panel [data-testid="stMarkdownContainer"]:has(.submission-accepted) {{
+        margin: 0 !important;
+        padding: 0 !important;
+    }}
+    .st-key-submit-ex-rating-panel .submission-accepted {{
+        background: rgba(33, 195, 84, 0.15);
+        border: 1px solid rgba(33, 195, 84, 0.45);
+        border-radius: 0.5rem;
+        color: rgb(33, 195, 84);
+        font-size: 1rem;
+        font-weight: 600;
+        line-height: 1.4;
+        margin: 0.75rem 0 0;
+        padding: 0.85rem 1rem;
+        text-align: center;
+    }}
     @media (min-width: {SHARED_RANKINGS_SIDE_BY_SIDE_MIN_PX}px) {{
         .st-key-shared-rankings-outer .st-key-shared-ex-leaderboard {{
             margin-right: 1.5rem !important;
@@ -241,14 +259,40 @@ def _already_submitted(
     return last["player"] == player and last["file_hash"] == _uploaded_file_hash(uploaded)
 
 
+def _accepted_submission_message() -> str | None:
+    last = st.session_state.get("last_submission")
+    if not last:
+        return None
+    message = last.get("message")
+    return str(message).strip() if message else None
+
+
 def _record_submission(
     player: str,
     uploaded: st.runtime.uploaded_file_manager.UploadedFile,
+    message: str,
 ) -> None:
     st.session_state.last_submission = {
         "player": player,
         "file_hash": _uploaded_file_hash(uploaded),
+        "message": message,
     }
+
+
+def _get_leaderboard_rankings() -> list | None:
+    if "leaderboard_rankings" not in st.session_state:
+        st.session_state.leaderboard_rankings = load_shared_ex_rankings()
+    return st.session_state.leaderboard_rankings
+
+
+def _refresh_leaderboard_rankings(player: str, ex_rating: float, date_added: str) -> None:
+    fallback = st.session_state.get("leaderboard_rankings") or []
+    st.session_state.leaderboard_rankings = rankings_after_submission(
+        player,
+        ex_rating,
+        date_added,
+        fallback,
+    )
 
 
 def _load_ratings_from_upload(
@@ -287,6 +331,31 @@ def _render_submission_ex_rating(submitted_rating: float) -> None:
         </div>
         """,
         unsafe_allow_html=True,
+    )
+
+
+def _render_submission_accepted(message: str) -> None:
+    st.markdown(
+        f'<div class="submission-accepted">{message}</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def _render_leaderboard_table(rankings: list) -> None:
+    ranks = competition_ranks(rankings)
+    st.dataframe(
+        [
+            {
+                "Rank": rank,
+                "Player": entry.player,
+                "EX Rating": format_rating_display(entry.ex_rating),
+                "Last Updated": format_last_updated(_entry_last_updated(entry)),
+            }
+            for rank, entry in zip(ranks, rankings, strict=True)
+        ],
+        width="content",
+        hide_index=True,
+        height=LEADERBOARD_TABLE_HEIGHT,
     )
 
 
@@ -338,11 +407,11 @@ def _render_submission_panel(
     else:
         st.caption(
             "New names are added to the leaderboard automatically. "
-            "If you're already listed, you can update your score by submitting with the same name."
+            "If you're already listed, you can update your score by submitting with the same name or selecting your name from the dropdown."
         )
         st.caption(
             "_Note: Existing ratings can only be updated with a higher rating. "
-            "Contact Nico with any issues._"
+            "Contact Nico with any issues or requests._"
         )
 
     if leaderboard_rankings:
@@ -367,7 +436,10 @@ def _render_submission_panel(
         if player and leaderboard_rankings
         else None
     )
-    if existing_entry:
+    submission_accepted = _already_submitted(player, submission_file)
+    accepted_message = _accepted_submission_message() if submission_accepted else None
+
+    if existing_entry and not submission_accepted:
         st.caption(
             "Leaderboard entry found: "
             f"**{format_rating_display(existing_entry.ex_rating)}** "
@@ -375,63 +447,80 @@ def _render_submission_panel(
         )
 
     submission_blocked_reason: str | None = None
-    if player and submitted_rating is not None and leaderboard_rankings:
+    if (
+        player
+        and submitted_rating is not None
+        and leaderboard_rankings
+        and not submission_accepted
+    ):
         _, submission_blocked_reason = validate_rating_submission(
             player,
             submitted_rating,
             leaderboard_rankings,
         )
 
-    already_submitted = _already_submitted(player, submission_file)
-    if already_submitted:
-        st.caption(
-            "Already submitted with this file and player name in this session. "
-            "Upload a new save file to submit an updated rating."
-        )
-    if submission_blocked_reason:
-        st.warning(submission_blocked_reason)
+    submission_in_progress = st.session_state.get("submission_in_progress", False)
 
-    submit_label = "Update leaderboard rating" if existing_entry else "Add to leaderboard"
-    with st.form("submit-ex-rating", clear_on_submit=False, enter_to_submit=False):
-        submitted = st.form_submit_button(
-            submit_label,
-            disabled=(
-                submission_file is None
-                or submission_ratings is None
-                or submission_error is not None
-                or pending_submission_url() is None
-                or already_submitted
-                or submission_blocked_reason is not None
-            ),
-        )
-
-    if submitted:
-        if not player:
-            st.error("Enter your player name.")
-        elif submission_file is None:
-            st.error("Upload your arcade-highscores.json to submit.")
-        elif submission_error:
-            st.error(submission_error)
-        elif already_submitted:
-            st.warning(
-                "Already submitted with this file and player name in this session. "
-                "Upload a new save file to submit an updated rating."
-            )
-        elif submission_blocked_reason:
+    if submission_accepted:
+        _render_submission_accepted(accepted_message or "Added to the leaderboard!")
+    else:
+        if submission_blocked_reason:
             st.warning(submission_blocked_reason)
-        elif submission_ratings and submitted_rating is not None:
-            success, message = submit_ranking(
-                player,
-                submitted_rating,
-                date.today().isoformat(),
+
+        submit_label = "Update leaderboard rating" if existing_entry else "Add to leaderboard"
+        with st.form("submit-ex-rating", clear_on_submit=False, enter_to_submit=False):
+            submitted = st.form_submit_button(
+                submit_label,
+                disabled=(
+                    submission_in_progress
+                    or submission_file is None
+                    or submission_ratings is None
+                    or submission_error is not None
+                    or pending_submission_url() is None
+                    or submission_blocked_reason is not None
+                ),
             )
-            if success:
-                _record_submission(player, submission_file)
-                st.success(message)
+
+        if submitted and not submission_in_progress:
+            if not player:
+                st.error("Enter your player name.")
+            elif submission_file is None:
+                st.error("Upload your arcade-highscores.json to submit.")
+            elif submission_error:
+                st.error(submission_error)
+            elif submission_blocked_reason:
+                st.warning(submission_blocked_reason)
+            elif submission_ratings and submitted_rating is not None:
+                st.session_state.pending_submission = {
+                    "player": player,
+                    "ex_rating": submitted_rating,
+                    "date_added": date.today().isoformat(),
+                }
+                st.session_state.submission_in_progress = True
+                st.rerun()
             else:
-                st.warning(message)
+                st.warning("No rated charts found in that file.")
+
+    if submission_in_progress and st.session_state.get("pending_submission"):
+        pending = st.session_state.pop("pending_submission")
+        with st.spinner("Submitting to leaderboard…"):
+            success, message = submit_ranking(
+                pending["player"],
+                pending["ex_rating"],
+                pending["date_added"],
+            )
+        st.session_state.submission_in_progress = False
+        if success:
+            if submission_file is not None:
+                _record_submission(pending["player"], submission_file, message)
+            _refresh_leaderboard_rankings(
+                pending["player"],
+                pending["ex_rating"],
+                pending["date_added"],
+            )
+            st.rerun()
         else:
-            st.warning("No rated charts found in that file.")
+            st.warning(message)
 
 
 def render_shared_ex_rankings(
@@ -454,26 +543,13 @@ def render_shared_ex_rankings(
                 )
 
                 try:
-                    rankings = load_shared_ex_rankings()
+                    rankings = _get_leaderboard_rankings()
                 except Exception as error:
                     st.error(f"Could not load shared rankings: {error}")
                     rankings = None
 
                 if rankings is not None:
-                    st.dataframe(
-                        [
-                            {
-                                "Rank": rank,
-                                "Player": entry.player,
-                                "EX Rating": format_rating_display(entry.ex_rating),
-                                "Last Updated": format_last_updated(_entry_last_updated(entry)),
-                            }
-                            for rank, entry in enumerate(rankings, 1)
-                        ],
-                        width="content",
-                        hide_index=True,
-                        height=LEADERBOARD_TABLE_HEIGHT,
-                    )
+                    _render_leaderboard_table(rankings)
 
             with st.container(border=True, key="submit-ex-rating-panel", width="content"):
                 st.subheader("Submit your EX Rating")

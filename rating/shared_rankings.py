@@ -138,24 +138,92 @@ def find_player_ranking(
     return None
 
 
+def competition_ranks(rankings: list[SharedExRanking]) -> list[int]:
+    """Tied scores share a rank; the next rank skips (e.g. 1, 1, 3)."""
+    if not rankings:
+        return []
+    ranks = [1]
+    for index in range(1, len(rankings)):
+        if rankings[index].ex_rating == rankings[index - 1].ex_rating:
+            ranks.append(ranks[-1])
+        else:
+            ranks.append(index + 1)
+    return ranks
+
+
+def merge_submission_into_rankings(
+    rankings: list[SharedExRanking],
+    player: str,
+    ex_rating: float,
+    last_updated: str,
+) -> list[SharedExRanking]:
+    player_key = player.strip().casefold()
+    updated: list[SharedExRanking] = []
+    found = False
+    for entry in rankings:
+        if entry.player.strip().casefold() == player_key:
+            found = True
+            if ex_rating > entry.ex_rating:
+                updated.append(
+                    SharedExRanking(
+                        player=entry.player,
+                        ex_rating=ex_rating,
+                        last_updated=last_updated,
+                    )
+                )
+            else:
+                updated.append(entry)
+        else:
+            updated.append(entry)
+    if not found:
+        updated.append(
+            SharedExRanking(
+                player=player.strip(),
+                ex_rating=ex_rating,
+                last_updated=last_updated,
+            )
+        )
+    return sorted(updated, key=lambda ranking: ranking.ex_rating, reverse=True)
+
+
+def rankings_after_submission(
+    player: str,
+    ex_rating: float,
+    date_added: str,
+    fallback_rankings: list[SharedExRanking],
+) -> list[SharedExRanking]:
+    try:
+        fresh = load_shared_ex_rankings()
+    except (OSError, urllib.error.URLError, ValueError, KeyError):
+        return merge_submission_into_rankings(
+            fallback_rankings,
+            player,
+            ex_rating,
+            date_added,
+        )
+
+    entry = find_player_ranking(player, fresh)
+    if entry is not None and entry.ex_rating >= ex_rating:
+        return fresh
+    return merge_submission_into_rankings(fallback_rankings, player, ex_rating, date_added)
+
+
 def validate_rating_submission(
     player: str,
     new_rating: float,
     rankings: list[SharedExRanking],
 ) -> tuple[bool, str | None]:
     """New players pass; returning players must beat their current leaderboard rating."""
-    from rating.formatting import DISPLAY_RATING_DECIMALS, format_rating_display
+    from rating.formatting import format_rating_display
 
     existing = find_player_ranking(player, rankings)
     if existing is None:
         return True, None
 
-    new_value = round(new_rating, DISPLAY_RATING_DECIMALS)
-    existing_value = round(existing.ex_rating, DISPLAY_RATING_DECIMALS)
-    if new_value <= existing_value:
+    if new_rating <= existing.ex_rating:
         return False, (
-            f"Your submitted rating ({format_rating_display(new_value)}) must be higher than "
-            f"your current leaderboard rating ({format_rating_display(existing_value)})."
+            f"Your submitted rating ({format_rating_display(new_rating)}) must be higher than "
+            f"your current leaderboard rating ({format_rating_display(existing.ex_rating)})."
         )
     return True, None
 

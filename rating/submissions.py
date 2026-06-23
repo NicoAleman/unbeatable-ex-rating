@@ -1,7 +1,14 @@
 import json
 import os
+import socket
 import urllib.error
 import urllib.request
+
+SUBMISSION_TIMEOUT_SECONDS = 60
+SUBMISSION_TIMEOUT_MESSAGE = (
+    "The submission server did not respond in time. "
+    "Your rating may still have been saved — refresh the leaderboard to check."
+)
 
 
 def submission_url() -> str | None:
@@ -46,15 +53,24 @@ def submit_ranking(player: str, ex_rating: float, date_added: str) -> tuple[bool
     request = urllib.request.Request(
         url,
         data=payload,
-        headers={"Content-Type": "application/json"},
+        headers={
+            "Content-Type": "application/json",
+            "User-Agent": "UnbeatableEXRating/1.0",
+        },
         method="POST",
     )
 
     try:
-        with urllib.request.urlopen(request, timeout=15) as response:
+        with urllib.request.urlopen(request, timeout=SUBMISSION_TIMEOUT_SECONDS) as response:
             body = json.loads(response.read().decode("utf-8"))
+    except TimeoutError:
+        return False, SUBMISSION_TIMEOUT_MESSAGE
     except urllib.error.URLError as error:
+        if isinstance(error.reason, (TimeoutError, socket.timeout)):
+            return False, SUBMISSION_TIMEOUT_MESSAGE
         return False, f"Could not submit: {error}"
+    except json.JSONDecodeError:
+        return False, "Received an invalid response from the submission server."
 
     if body.get("success"):
         return True, str(body.get("message", "Submitted successfully."))
