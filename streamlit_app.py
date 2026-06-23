@@ -45,13 +45,14 @@ if not ratings:
 
 ex_total, standard_total, ex_top, standard_top = get_rating_boards(ratings)
 
-total_col, ex_col, std_col, completion_col = st.columns(4)
-total_col.metric("Charts rated", len(ratings))
-ex_col.metric("Player EX Rating", f"{ex_total:.3f}")
-std_col.metric("Player Rating", f"{standard_total:.3f}")
-completion_col.metric("w/ Completion", f"{standard_total + COMPLETION_BONUS:.3f}")
+ex_col, std_col = st.columns(2)
+ex_col.metric("EX Rating", f"{ex_total:.3f}")
+std_col.metric("Standard Rating (w/ +2.0 Completion)", f"{standard_total + COMPLETION_BONUS:.3f}")
 
 st.divider()
+
+TABLE_ROW_HEIGHT = 35
+TABLE_HEIGHT = (TOP_N + 1) * TABLE_ROW_HEIGHT
 
 ex_board_col, std_board_col = st.columns(2)
 
@@ -75,6 +76,7 @@ with ex_board_col:
         ],
         use_container_width=True,
         hide_index=True,
+        height=TABLE_HEIGHT,
     )
 
 with std_board_col:
@@ -94,6 +96,7 @@ with std_board_col:
         ],
         use_container_width=True,
         hide_index=True,
+        height=TABLE_HEIGHT,
     )
 
 st.divider()
