@@ -1,6 +1,6 @@
 """Shared rating formulas: accuracy power, grades, grade bonus, and star rating."""
 
-from rating.constants import RATING_DIVISOR
+from rating.constants import EX_S_PLUS_THRESHOLD, RATING_DIVISOR
 
 
 def accuracy_power(acc_percent: float) -> float:
@@ -52,9 +52,9 @@ def compute_ex_grade(
     has_misses = miss_count > 0
     grade_acc = ex_accuracy + (1.0 if not has_misses else 0.0)
 
-    if grade_acc >= 95.0 and critical_count == max_combo:
+    if not has_misses and grade_acc >= 95.0 and critical_count == max_combo:
         return "S++"
-    if not has_misses and ex_accuracy > 99.0:
+    if not has_misses and ex_accuracy >= EX_S_PLUS_THRESHOLD:
         return "S+"
     if grade_acc >= 95.0:
         return "S"
