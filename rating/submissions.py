@@ -4,27 +4,35 @@ import urllib.error
 import urllib.request
 
 
-def pending_submission_url() -> str | None:
+def submission_url() -> str | None:
     try:
         import streamlit as st
 
-        url = st.secrets.get("pending_submission_url")
-        if url and "YOUR_DEPLOYMENT_ID" not in str(url):
-            return str(url)
+        for key in ("submission_url", "pending_submission_url"):
+            url = st.secrets.get(key)
+            if url and "YOUR_DEPLOYMENT_ID" not in str(url):
+                return str(url)
     except Exception:
         pass
-    url = os.environ.get("PENDING_SUBMISSION_URL")
-    if url and "YOUR_DEPLOYMENT_ID" not in url:
-        return url
+
+    for env_key in ("SUBMISSION_URL", "PENDING_SUBMISSION_URL"):
+        url = os.environ.get(env_key)
+        if url and "YOUR_DEPLOYMENT_ID" not in url:
+            return url
     return None
 
 
+def pending_submission_url() -> str | None:
+    """Backward-compatible alias for submission_url()."""
+    return submission_url()
+
+
 def submissions_configured() -> bool:
-    return pending_submission_url() is not None
+    return submission_url() is not None
 
 
-def submit_pending_ranking(player: str, ex_rating: float, date_added: str) -> tuple[bool, str]:
-    url = pending_submission_url()
+def submit_ranking(player: str, ex_rating: float, date_added: str) -> tuple[bool, str]:
+    url = submission_url()
     if not url:
         return False, "Submissions are not configured yet."
 
@@ -49,5 +57,10 @@ def submit_pending_ranking(player: str, ex_rating: float, date_added: str) -> tu
         return False, f"Could not submit: {error}"
 
     if body.get("success"):
-        return True, "Submitted for review. You'll appear on the board once approved."
-    return False, body.get("error", "Submission failed.")
+        return True, str(body.get("message", "Submitted successfully."))
+    return False, str(body.get("error", "Submission failed."))
+
+
+def submit_pending_ranking(player: str, ex_rating: float, date_added: str) -> tuple[bool, str]:
+    """Backward-compatible alias for submit_ranking()."""
+    return submit_ranking(player, ex_rating, date_added)

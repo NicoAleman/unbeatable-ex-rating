@@ -125,6 +125,41 @@ def _load_shared_ex_rankings_from_json(path: Path = SHARED_EX_RANKINGS_PATH) -> 
     return sorted(rankings, key=lambda ranking: ranking.ex_rating, reverse=True)
 
 
+def find_player_ranking(
+    player: str,
+    rankings: list[SharedExRanking],
+) -> SharedExRanking | None:
+    player_key = player.strip().casefold()
+    if not player_key:
+        return None
+    for entry in rankings:
+        if entry.player.strip().casefold() == player_key:
+            return entry
+    return None
+
+
+def validate_rating_submission(
+    player: str,
+    new_rating: float,
+    rankings: list[SharedExRanking],
+) -> tuple[bool, str | None]:
+    """New players pass; returning players must beat their current leaderboard rating."""
+    from rating.formatting import DISPLAY_RATING_DECIMALS, format_rating_display
+
+    existing = find_player_ranking(player, rankings)
+    if existing is None:
+        return True, None
+
+    new_value = round(new_rating, DISPLAY_RATING_DECIMALS)
+    existing_value = round(existing.ex_rating, DISPLAY_RATING_DECIMALS)
+    if new_value <= existing_value:
+        return False, (
+            f"Your submitted rating ({format_rating_display(new_value)}) must be higher than "
+            f"your current leaderboard rating ({format_rating_display(existing_value)})."
+        )
+    return True, None
+
+
 def load_shared_ex_rankings() -> list[SharedExRanking]:
     try:
         return _parse_rankings_csv(_fetch_sheet_csv(GOOGLE_SHEET_APPROVED_TAB))

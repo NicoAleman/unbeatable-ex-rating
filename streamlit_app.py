@@ -34,7 +34,10 @@ format_song_display_name = formatting_module.format_song_display_name
 format_rating_board_csv = board_module.format_rating_board_csv
 player_ex_rating_with_completion = board_module.player_ex_rating_with_completion
 load_shared_ex_rankings = shared_rankings_module.load_shared_ex_rankings
+find_player_ranking = shared_rankings_module.find_player_ranking
+validate_rating_submission = shared_rankings_module.validate_rating_submission
 pending_submission_url = submissions_module.pending_submission_url
+submit_ranking = submissions_module.submit_ranking
 submit_pending_ranking = submissions_module.submit_pending_ranking
 
 _DATE_FORMATS = ("%Y-%m-%d", "%m/%d/%Y", "%m/%d/%y", "%B %d, %Y", "%b %d, %Y")
@@ -73,9 +76,13 @@ st.set_page_config(
 
 TABLE_ROW_HEIGHT = 35
 TABLE_HEIGHT = (TOP_N + 1) * TABLE_ROW_HEIGHT
+LEADERBOARD_VISIBLE_ROWS = 15.5
+LEADERBOARD_TABLE_HEIGHT = int((LEADERBOARD_VISIBLE_ROWS + 1) * TABLE_ROW_HEIGHT)
 SIDE_BY_SIDE_MIN_VIEWPORT_PX = 1900
 # Leaderboard + submission panel are content-width; side-by-side below the full board breakpoint.
 SHARED_RANKINGS_SIDE_BY_SIDE_MIN_PX = 1000
+# Max width for the submission panel when shown beside the leaderboard.
+SUBMIT_EX_RATING_PANEL_MAX_WIDTH_PX = 540
 # Each board width at the side-by-side breakpoint (~1rem page inset per side, 1rem gap).
 BOARD_MAX_WIDTH_PX = (SIDE_BY_SIDE_MIN_VIEWPORT_PX - 64 - 16) // 2
 
@@ -113,16 +120,58 @@ st.markdown(
         display: flex !important;
         flex-direction: row !important;
         flex-wrap: nowrap !important;
-        align-items: center !important;
+        align-items: flex-start !important;
         gap: 1rem;
         width: fit-content !important;
         max-width: 100% !important;
     }}
-    .st-key-shared-rankings-outer .st-key-shared-ex-leaderboard,
-    .st-key-shared-rankings-outer .st-key-submit-ex-rating-panel {{
+    .st-key-shared-rankings-outer .st-key-shared-ex-leaderboard {{
         flex: 0 0 auto !important;
         width: auto !important;
         max-width: 100% !important;
+    }}
+    .st-key-shared-rankings-outer .st-key-submit-ex-rating-panel {{
+        flex: 0 0 auto !important;
+        width: {SUBMIT_EX_RATING_PANEL_MAX_WIDTH_PX}px !important;
+        max-width: 100% !important;
+    }}
+    .st-key-submit-ex-rating-panel [data-testid="stVerticalBlockBorderWrapper"] {{
+        width: 100% !important;
+        max-width: 100% !important;
+        box-sizing: border-box !important;
+    }}
+    .st-key-submit-ex-rating-panel [data-testid="stTextInput"],
+    .st-key-submit-ex-rating-panel [data-testid="stFileUploader"],
+    .st-key-submit-ex-rating-panel [data-testid="stForm"] {{
+        max-width: 100% !important;
+    }}
+    .st-key-submit-ex-rating-panel [data-testid="stMarkdownContainer"]:has(.submission-ex-rating) {{
+        margin: 0 !important;
+        padding: 0.35rem 0 !important;
+    }}
+    .st-key-submit-ex-rating-panel [data-testid="stMarkdownContainer"]:has(.submission-rating-divider) {{
+        margin: 0 !important;
+        padding: 0 !important;
+    }}
+    .st-key-submit-ex-rating-panel .submission-ex-rating {{
+        margin: 0;
+        padding: 0;
+        color: rgba(250, 250, 250, 0.6);
+    }}
+    .st-key-submit-ex-rating-panel .submission-ex-rating-value {{
+        font-size: 1.125rem;
+        line-height: 1.4;
+    }}
+    .st-key-submit-ex-rating-panel .submission-ex-rating-note {{
+        font-size: 0.875rem;
+        font-style: italic;
+        line-height: 1.4;
+        margin-top: 0.15rem;
+    }}
+    .st-key-submit-ex-rating-panel .submission-rating-divider {{
+        border-top: 1px solid rgba(250, 250, 250, 0.2);
+        margin: 0;
+        height: 0;
     }}
     @media (min-width: {SHARED_RANKINGS_SIDE_BY_SIDE_MIN_PX}px) {{
         .st-key-shared-rankings-outer .st-key-shared-ex-leaderboard {{
@@ -133,6 +182,9 @@ st.markdown(
         .st-key-shared-rankings-outer [data-testid="stHorizontalBlock"] {{
             flex-direction: column !important;
             align-items: flex-start !important;
+        }}
+        .st-key-shared-rankings-outer .st-key-submit-ex-rating-panel {{
+            width: 100% !important;
         }}
         .st-key-shared-rankings-outer .st-key-shared-ex-leaderboard {{
             margin-right: 0 !important;
@@ -214,19 +266,52 @@ def _load_ratings_from_upload(
     return loaded_ratings, None
 
 
+MANUAL_PLAYER_ENTRY = "- New Player / Manual Entry -"
+
+
+def _render_submission_using_line(filename: str, from_above: bool) -> None:
+    if from_above:
+        st.caption(f"Using **{filename}** from your upload above.")
+    else:
+        st.caption(f"Using **{filename}**.")
+
+
+def _render_submission_ex_rating(submitted_rating: float) -> None:
+    st.markdown(
+        f"""
+        <div class="submission-ex-rating">
+            <div class="submission-ex-rating-value">
+                Your EX Rating: <strong>{format_rating_display(submitted_rating)}</strong>
+            </div>
+            <div class="submission-ex-rating-note">(includes +2.0 completion bonus)</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def _render_submission_panel(
     uploaded: st.runtime.uploaded_file_manager.UploadedFile | None,
     ratings: list[ChartRating] | None,
+    leaderboard_rankings: list | None,
 ) -> None:
     submission_file = uploaded
     submission_ratings = ratings
     submission_error: str | None = None
 
     if uploaded is not None:
-        st.caption(f"Using **{uploaded.name}** from your upload above.")
+        submission_file = uploaded
+        submission_ratings = ratings
+        _render_submission_using_line(uploaded.name, from_above=True)
     else:
+        panel_upload = st.session_state.get("submission-highscores")
+        uploader_label = (
+            f"Using {panel_upload.name}."
+            if panel_upload is not None
+            else "arcade-highscores.json"
+        )
         submission_file = st.file_uploader(
-            "arcade-highscores.json",
+            uploader_label,
             type="json",
             key="submission-highscores",
         )
@@ -234,16 +319,15 @@ def _render_submission_panel(
             submission_ratings, submission_error = _load_ratings_from_upload(submission_file)
             if submission_error:
                 st.error(submission_error)
-            else:
-                st.caption(f"Using **{submission_file.name}**.")
         else:
             st.info("Upload your arcade-highscores.json to submit.")
 
     if submission_ratings:
-        st.caption(
-            f"Your EX Rating: **{format_rating_display(player_ex_rating_with_completion(submission_ratings))}** "
-            "(includes +2.0 completion bonus)"
-        )
+        submitted_rating = player_ex_rating_with_completion(submission_ratings)
+        _render_submission_ex_rating(submitted_rating)
+        st.markdown('<div class="submission-rating-divider"></div>', unsafe_allow_html=True)
+    else:
+        submitted_rating = None
 
     if pending_submission_url() is None:
         st.info(
@@ -251,25 +335,73 @@ def _render_submission_panel(
             "Add your Apps Script deployment URL to `.streamlit/secrets.toml` as "
             "`pending_submission_url` (see `.streamlit/secrets.toml.example`)."
         )
+    else:
+        st.caption(
+            "New names are added to the leaderboard automatically. "
+            "If you're already listed, you can update your score by submitting with the same name."
+        )
+        st.caption(
+            "_Note: Existing ratings can only be updated with a higher rating. "
+            "Contact Nico with any issues._"
+        )
 
-    player_name = st.text_input("Player name", max_chars=64, key="submission-player")
-    player = player_name.strip()
+    if leaderboard_rankings:
+        player_options = [MANUAL_PLAYER_ENTRY] + sorted(
+            {entry.player for entry in leaderboard_rankings},
+            key=str.casefold,
+        )
+        selected_player_option = st.selectbox(
+            "Player",
+            options=player_options,
+            key="submission-player-mode",
+        )
+        if selected_player_option == MANUAL_PLAYER_ENTRY:
+            player = st.text_input("Player name", max_chars=64, key="submission-player").strip()
+        else:
+            player = selected_player_option.strip()
+    else:
+        player = st.text_input("Player name", max_chars=64, key="submission-player").strip()
+
+    existing_entry = (
+        find_player_ranking(player, leaderboard_rankings)
+        if player and leaderboard_rankings
+        else None
+    )
+    if existing_entry:
+        st.caption(
+            "Leaderboard entry found: "
+            f"**{format_rating_display(existing_entry.ex_rating)}** "
+            f"(last updated {format_last_updated(_entry_last_updated(existing_entry))})"
+        )
+
+    submission_blocked_reason: str | None = None
+    if player and submitted_rating is not None and leaderboard_rankings:
+        _, submission_blocked_reason = validate_rating_submission(
+            player,
+            submitted_rating,
+            leaderboard_rankings,
+        )
+
     already_submitted = _already_submitted(player, submission_file)
     if already_submitted:
         st.caption(
-            "Already submitted with this file and player name. "
-            "Change your name or upload a new file to submit again."
+            "Already submitted with this file and player name in this session. "
+            "Upload a new save file to submit an updated rating."
         )
+    if submission_blocked_reason:
+        st.warning(submission_blocked_reason)
 
+    submit_label = "Update leaderboard rating" if existing_entry else "Add to leaderboard"
     with st.form("submit-ex-rating", clear_on_submit=False, enter_to_submit=False):
         submitted = st.form_submit_button(
-            "Submit for review",
+            submit_label,
             disabled=(
                 submission_file is None
                 or submission_ratings is None
                 or submission_error is not None
                 or pending_submission_url() is None
                 or already_submitted
+                or submission_blocked_reason is not None
             ),
         )
 
@@ -282,13 +414,15 @@ def _render_submission_panel(
             st.error(submission_error)
         elif already_submitted:
             st.warning(
-                "Already submitted with this file and player name. "
-                "Change your name or upload a new file to submit again."
+                "Already submitted with this file and player name in this session. "
+                "Upload a new save file to submit an updated rating."
             )
-        elif submission_ratings:
-            success, message = submit_pending_ranking(
+        elif submission_blocked_reason:
+            st.warning(submission_blocked_reason)
+        elif submission_ratings and submitted_rating is not None:
+            success, message = submit_ranking(
                 player,
-                player_ex_rating_with_completion(submission_ratings),
+                submitted_rating,
                 date.today().isoformat(),
             )
             if success:
@@ -316,7 +450,7 @@ def render_shared_ex_rankings(
             with st.container(key="shared-ex-leaderboard", width="content"):
                 st.subheader("EX Rating Leaderboard")
                 st.caption(
-                    "Community-curated leaderboard. Submit your rating for review!"
+                    "Community leaderboard. Submit your rating to join or update your score!"
                 )
 
                 try:
@@ -338,11 +472,12 @@ def render_shared_ex_rankings(
                         ],
                         width="content",
                         hide_index=True,
+                        height=LEADERBOARD_TABLE_HEIGHT,
                     )
 
             with st.container(border=True, key="submit-ex-rating-panel", width="content"):
                 st.subheader("Submit your EX Rating")
-                _render_submission_panel(uploaded, ratings)
+                _render_submission_panel(uploaded, ratings, rankings)
 
 
 def render_ex_rating_info() -> None:
