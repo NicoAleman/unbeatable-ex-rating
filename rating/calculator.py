@@ -15,6 +15,7 @@ from rating.formulas import (
     compute_standard_grade,
     song_star_rating,
 )
+from rating.level_overrides import resolve_chart_level
 from rating.models import ChartRating
 
 
@@ -27,7 +28,7 @@ def ex_accuracy_percent(score: int, max_score: int) -> float:
 def rate_chart(entry: dict, critical_max_score: int) -> ChartRating:
     key = chart_key(entry["song"])
     song, difficulty = split_chart_key(key)
-    level = entry.get("level", 0)
+    level = resolve_chart_level(key, entry.get("level", 0))
     score = entry.get("score", 0)
     misses = miss_count(entry)
     criticals = critical_count(entry)
