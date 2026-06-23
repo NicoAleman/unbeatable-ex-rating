@@ -58,9 +58,12 @@ def rate_chart(entry: dict, critical_max_score: int) -> ChartRating:
     )
 
 
-def build_ratings(highscores_path: Path, max_scores_path: Path) -> list[ChartRating]:
+def build_ratings(
+    highscores: Path | dict,
+    max_scores_path: Path,
+) -> list[ChartRating]:
     max_scores = load_critical_max_scores(max_scores_path)
-    data = load_highscores(highscores_path)
+    data = load_highscores(highscores) if isinstance(highscores, Path) else highscores
 
     ratings: list[ChartRating] = []
     for entry in data.get("highScores", []):
