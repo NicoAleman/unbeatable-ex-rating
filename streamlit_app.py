@@ -15,10 +15,12 @@ from rating.models import ChartRating
 importlib.reload(constants_module)
 
 from rating import board as board_module
+from rating import data as data_module
 from rating import formatting as formatting_module
 from rating import shared_rankings as shared_rankings_module
 from rating import submissions as submissions_module
 
+importlib.reload(data_module)
 importlib.reload(formatting_module)
 importlib.reload(board_module)
 importlib.reload(submissions_module)
@@ -28,6 +30,7 @@ COMPLETION_BONUS = constants_module.COMPLETION_BONUS
 DEFAULT_MAX_SCORES_PATH = constants_module.DEFAULT_MAX_SCORES_PATH
 TOP_N = constants_module.TOP_N
 format_rating_display = formatting_module.format_rating_display
+format_song_display_name = formatting_module.format_song_display_name
 format_rating_board_csv = board_module.format_rating_board_csv
 player_ex_rating_with_completion = board_module.player_ex_rating_with_completion
 load_shared_ex_rankings = shared_rankings_module.load_shared_ex_rankings
@@ -456,7 +459,7 @@ else:
                             [
                                 {
                                     "Rank": rank,
-                                    "Chart": chart.song,
+                                    "Chart": format_song_display_name(chart.song),
                                     "Difficulty": chart.difficulty,
                                     "Level": chart.level,
                                     "Accuracy": f"{chart.standard_accuracy:.2f}",
@@ -483,7 +486,7 @@ else:
                             [
                                 {
                                     "Rank": rank,
-                                    "Chart": chart.song,
+                                    "Chart": format_song_display_name(chart.song),
                                     "Difficulty": chart.difficulty,
                                     "Level": chart.level,
                                     "Accuracy": f"{chart.standard_accuracy:.2f}",

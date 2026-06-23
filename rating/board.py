@@ -3,7 +3,7 @@ from io import StringIO
 from pathlib import Path
 
 from rating.constants import COMPLETION_BONUS, TOP_N
-from rating.formatting import format_rating_display
+from rating.formatting import format_rating_display, format_song_display_name
 from rating.models import ChartRating
 
 EX_BOARD_HEADERS = [
@@ -92,7 +92,7 @@ def write_rating_board(
 def _ex_row(rank: int, chart: ChartRating) -> list:
     return [
         rank,
-        chart.song,
+        format_song_display_name(chart.song),
         chart.difficulty,
         chart.level,
         f"{chart.standard_accuracy:.2f}",
@@ -107,7 +107,7 @@ def _ex_row(rank: int, chart: ChartRating) -> list:
 def _standard_row(rank: int, chart: ChartRating) -> list:
     return [
         rank,
-        chart.song,
+        format_song_display_name(chart.song),
         chart.difficulty,
         chart.level,
         f"{chart.standard_accuracy:.2f}",
