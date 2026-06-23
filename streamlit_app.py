@@ -1,18 +1,66 @@
 """Unbeatable EX Rating — web UI (Streamlit)."""
 
+import hashlib
+import importlib
 import json
+
+from datetime import date, datetime
 
 import streamlit as st
 
 from rating import build_ratings, get_rating_boards
-from rating.board import format_rating_board_csv
-from rating.constants import COMPLETION_BONUS, DEFAULT_MAX_SCORES_PATH, TOP_N
-from rating.shared_rankings import (
-    format_date_added,
-    format_shared_rankings_last_updated,
-    load_shared_ex_rankings,
-    shared_rankings_last_updated,
-)
+from rating import constants as constants_module
+from rating.models import ChartRating
+
+importlib.reload(constants_module)
+
+from rating import board as board_module
+from rating import formatting as formatting_module
+from rating import shared_rankings as shared_rankings_module
+from rating import submissions as submissions_module
+
+importlib.reload(formatting_module)
+importlib.reload(board_module)
+importlib.reload(submissions_module)
+importlib.reload(shared_rankings_module)
+
+COMPLETION_BONUS = constants_module.COMPLETION_BONUS
+DEFAULT_MAX_SCORES_PATH = constants_module.DEFAULT_MAX_SCORES_PATH
+TOP_N = constants_module.TOP_N
+format_rating_display = formatting_module.format_rating_display
+format_rating_board_csv = board_module.format_rating_board_csv
+player_ex_rating_with_completion = board_module.player_ex_rating_with_completion
+load_shared_ex_rankings = shared_rankings_module.load_shared_ex_rankings
+pending_submission_url = submissions_module.pending_submission_url
+submit_pending_ranking = submissions_module.submit_pending_ranking
+
+_DATE_FORMATS = ("%Y-%m-%d", "%m/%d/%Y", "%m/%d/%y", "%B %d, %Y", "%b %d, %Y")
+
+
+def _entry_last_updated(entry: object) -> str:
+    value = getattr(entry, "last_updated", None)
+    if value:
+        return str(value)
+    return str(getattr(entry, "date_added", ""))
+
+
+def format_last_updated(value: object) -> str:
+    if value is None:
+        return "—"
+    text = str(value).strip()
+    if not text:
+        return "—"
+    try:
+        return datetime.fromisoformat(text).strftime("%B %d, %Y")
+    except ValueError:
+        pass
+    for fmt in _DATE_FORMATS:
+        try:
+            return datetime.strptime(text, fmt).strftime("%B %d, %Y")
+        except ValueError:
+            continue
+    return text
+
 
 st.set_page_config(
     page_title="Unbeatable EX Rating",
@@ -23,6 +71,8 @@ st.set_page_config(
 TABLE_ROW_HEIGHT = 35
 TABLE_HEIGHT = (TOP_N + 1) * TABLE_ROW_HEIGHT
 SIDE_BY_SIDE_MIN_VIEWPORT_PX = 1900
+# Leaderboard + submission panel are content-width; side-by-side below the full board breakpoint.
+SHARED_RANKINGS_SIDE_BY_SIDE_MIN_PX = 1000
 # Each board width at the side-by-side breakpoint (~1rem page inset per side, 1rem gap).
 BOARD_MAX_WIDTH_PX = (SIDE_BY_SIDE_MIN_VIEWPORT_PX - 64 - 16) // 2
 
@@ -55,6 +105,35 @@ st.markdown(
     }}
     .st-key-rating-boards-layout [data-testid="stVerticalBlockBorderWrapper"] {{
         width: 100%;
+    }}
+    .st-key-shared-rankings-outer [data-testid="stHorizontalBlock"] {{
+        display: flex !important;
+        flex-direction: row !important;
+        flex-wrap: nowrap !important;
+        align-items: center !important;
+        gap: 1rem;
+        width: fit-content !important;
+        max-width: 100% !important;
+    }}
+    .st-key-shared-rankings-outer .st-key-shared-ex-leaderboard,
+    .st-key-shared-rankings-outer .st-key-submit-ex-rating-panel {{
+        flex: 0 0 auto !important;
+        width: auto !important;
+        max-width: 100% !important;
+    }}
+    @media (min-width: {SHARED_RANKINGS_SIDE_BY_SIDE_MIN_PX}px) {{
+        .st-key-shared-rankings-outer .st-key-shared-ex-leaderboard {{
+            margin-right: 1.5rem !important;
+        }}
+    }}
+    @media (max-width: {SHARED_RANKINGS_SIDE_BY_SIDE_MIN_PX - 1}px) {{
+        .st-key-shared-rankings-outer [data-testid="stHorizontalBlock"] {{
+            flex-direction: column !important;
+            align-items: flex-start !important;
+        }}
+        .st-key-shared-rankings-outer .st-key-shared-ex-leaderboard {{
+            margin-right: 0 !important;
+        }}
     }}
     @media (max-width: {SIDE_BY_SIDE_MIN_VIEWPORT_PX - 1}px) {{
         .st-key-rating-boards-layout[data-testid="stHorizontalBlock"],
@@ -93,34 +172,174 @@ def board_header(title: str, rating: str, caption: str | None = None) -> None:
     )
 
 
-def render_shared_ex_rankings() -> None:
+def _uploaded_file_hash(uploaded: st.runtime.uploaded_file_manager.UploadedFile) -> str:
+    return hashlib.sha256(uploaded.getvalue()).hexdigest()
+
+
+def _already_submitted(
+    player: str,
+    uploaded: st.runtime.uploaded_file_manager.UploadedFile | None,
+) -> bool:
+    last = st.session_state.get("last_submission")
+    if not last or uploaded is None or not player:
+        return False
+    return last["player"] == player and last["file_hash"] == _uploaded_file_hash(uploaded)
+
+
+def _record_submission(
+    player: str,
+    uploaded: st.runtime.uploaded_file_manager.UploadedFile,
+) -> None:
+    st.session_state.last_submission = {
+        "player": player,
+        "file_hash": _uploaded_file_hash(uploaded),
+    }
+
+
+def _load_ratings_from_upload(
+    uploaded_file: st.runtime.uploaded_file_manager.UploadedFile,
+) -> tuple[list[ChartRating] | None, str | None]:
+    try:
+        highscores = json.loads(uploaded_file.getvalue().decode("utf-8"))
+    except json.JSONDecodeError:
+        return None, "That file doesn't look like valid JSON."
+    if "highScores" not in highscores:
+        return None, "Missing `highScores` in the JSON."
+    loaded_ratings = build_ratings(highscores, DEFAULT_MAX_SCORES_PATH)
+    if not loaded_ratings:
+        return None, "No rated charts found in that file."
+    return loaded_ratings, None
+
+
+def _render_submission_panel(
+    uploaded: st.runtime.uploaded_file_manager.UploadedFile | None,
+    ratings: list[ChartRating] | None,
+) -> None:
+    submission_file = uploaded
+    submission_ratings = ratings
+    submission_error: str | None = None
+
+    if uploaded is not None:
+        st.caption(f"Using **{uploaded.name}** from your upload above.")
+    else:
+        submission_file = st.file_uploader(
+            "arcade-highscores.json",
+            type="json",
+            key="submission-highscores",
+        )
+        if submission_file is not None:
+            submission_ratings, submission_error = _load_ratings_from_upload(submission_file)
+            if submission_error:
+                st.error(submission_error)
+            else:
+                st.caption(f"Using **{submission_file.name}**.")
+        else:
+            st.info("Upload your arcade-highscores.json to submit.")
+
+    if submission_ratings:
+        st.caption(
+            f"Your EX Rating: **{format_rating_display(player_ex_rating_with_completion(submission_ratings))}** "
+            "(includes +2.0 completion bonus)"
+        )
+
+    if pending_submission_url() is None:
+        st.info(
+            "Submissions are not set up on this server yet. "
+            "Add your Apps Script deployment URL to `.streamlit/secrets.toml` as "
+            "`pending_submission_url` (see `.streamlit/secrets.toml.example`)."
+        )
+
+    player_name = st.text_input("Player name", max_chars=64, key="submission-player")
+    player = player_name.strip()
+    already_submitted = _already_submitted(player, submission_file)
+    if already_submitted:
+        st.caption(
+            "Already submitted with this file and player name. "
+            "Change your name or upload a new file to submit again."
+        )
+
+    with st.form("submit-ex-rating", clear_on_submit=False, enter_to_submit=False):
+        submitted = st.form_submit_button(
+            "Submit for review",
+            disabled=(
+                submission_file is None
+                or submission_ratings is None
+                or submission_error is not None
+                or pending_submission_url() is None
+                or already_submitted
+            ),
+        )
+
+    if submitted:
+        if not player:
+            st.error("Enter your player name.")
+        elif submission_file is None:
+            st.error("Upload your arcade-highscores.json to submit.")
+        elif submission_error:
+            st.error(submission_error)
+        elif already_submitted:
+            st.warning(
+                "Already submitted with this file and player name. "
+                "Change your name or upload a new file to submit again."
+            )
+        elif submission_ratings:
+            success, message = submit_pending_ranking(
+                player,
+                player_ex_rating_with_completion(submission_ratings),
+                date.today().isoformat(),
+            )
+            if success:
+                _record_submission(player, submission_file)
+                st.success(message)
+            else:
+                st.warning(message)
+        else:
+            st.warning("No rated charts found in that file.")
+
+
+def render_shared_ex_rankings(
+    uploaded: st.runtime.uploaded_file_manager.UploadedFile | None = None,
+    ratings: list[ChartRating] | None = None,
+) -> None:
     st.divider()
 
-    st.subheader("Shared EX Ratings")
+    with st.container(key="shared-rankings-outer", width="content"):
+        with st.container(
+            key="shared-rankings-layout",
+            horizontal=True,
+            gap="medium",
+            vertical_alignment="top",
+        ):
+            with st.container(key="shared-ex-leaderboard", width="content"):
+                st.subheader("EX Rating Leaderboard")
+                st.caption(
+                    "Community-curated leaderboard. Submit your rating for review!"
+                )
 
-    with st.container(key="shared-ex-rankings-content", width="content"):
-        st.caption(
-            "Updated manually by Nico. Share your EX Rating or arcade-highscores.json with Nico to be included."
-        )
+                try:
+                    rankings = load_shared_ex_rankings()
+                except Exception as error:
+                    st.error(f"Could not load shared rankings: {error}")
+                    rankings = None
 
-        rankings = load_shared_ex_rankings()
-        st.dataframe(
-            [
-                {
-                    "Rank": rank,
-                    "Player": entry.player,
-                    "EX Rating": f"{entry.ex_rating:.3f}",
-                    "Date Added": format_date_added(entry.date_added),
-                }
-                for rank, entry in enumerate(rankings, 1)
-            ],
-            width="content",
-            hide_index=True,
-        )
+                if rankings is not None:
+                    st.dataframe(
+                        [
+                            {
+                                "Rank": rank,
+                                "Player": entry.player,
+                                "EX Rating": format_rating_display(entry.ex_rating),
+                                "Last Updated": format_last_updated(_entry_last_updated(entry)),
+                            }
+                            for rank, entry in enumerate(rankings, 1)
+                        ],
+                        width="content",
+                        hide_index=True,
+                    )
 
-        last_updated = shared_rankings_last_updated()
-        if last_updated is not None:
-            st.caption(f"Last updated {format_shared_rankings_last_updated(last_updated)}")
+            with st.container(border=True, key="submit-ex-rating-panel", width="content"):
+                st.subheader("Submit your EX Rating")
+                _render_submission_panel(uploaded, ratings)
 
 
 def render_ex_rating_info() -> None:
@@ -197,7 +416,8 @@ st.markdown(
     "`C:\\Users\\<YourName>\\AppData\\LocalLow\\D-CELL GAMES\\UNBEATABLE\\PROFILES\\<profile>\\arcade-highscores.json`. "
 )
 
-uploaded = st.file_uploader("arcade-highscores.json", type="json")
+uploaded = st.file_uploader("arcade-highscores.json", type="json", key="arcade-highscores")
+ratings: list[ChartRating] | None = None
 
 if uploaded is None:
     st.info("Choose your arcade highscores file to get started.")
@@ -216,8 +436,8 @@ else:
             if not ratings:
                 st.warning("No rated charts found. Check that your file has Classic mode scores for known charts.")
             else:
-                ex_total, standard_total, ex_top, standard_top = get_rating_boards(ratings)
-                ex_with_completion = ex_total + COMPLETION_BONUS
+                _, standard_total, ex_top, standard_top = get_rating_boards(ratings)
+                ex_with_completion = player_ex_rating_with_completion(ratings)
                 standard_with_completion = standard_total + COMPLETION_BONUS
 
                 with st.container(
@@ -229,7 +449,7 @@ else:
                     with st.container(border=True, key="ex-rating-board"):
                         board_header(
                             "EX Rating",
-                            f"{ex_with_completion:.3f}",
+                            format_rating_display(ex_with_completion),
                             "Includes +2.0 completion bonus",
                         )
                         st.dataframe(
@@ -244,7 +464,7 @@ else:
                                     "Max Score": chart.max_score,
                                     "EX Accuracy": f"{chart.ex_accuracy:.2f}",
                                     "EX Grade": chart.ex_grade,
-                                    "EX Rating": f"{chart.ex_rating:.3f}",
+                                    "EX Rating": format_rating_display(chart.ex_rating),
                                 }
                                 for rank, chart in enumerate(ex_top, 1)
                             ],
@@ -256,7 +476,7 @@ else:
                     with st.container(border=True, key="std-rating-board"):
                         board_header(
                             "Standard Rating",
-                            f"{standard_with_completion:.3f}",
+                            format_rating_display(standard_with_completion),
                             "Includes +2.0 completion bonus",
                         )
                         st.dataframe(
@@ -268,7 +488,7 @@ else:
                                     "Level": chart.level,
                                     "Accuracy": f"{chart.standard_accuracy:.2f}",
                                     "Grade": chart.standard_grade,
-                                    "Rating": f"{chart.standard_rating:.3f}",
+                                    "Rating": format_rating_display(chart.standard_rating),
                                 }
                                 for rank, chart in enumerate(standard_top, 1)
                             ],
@@ -284,5 +504,5 @@ else:
                     mime="text/csv",
                 )
 
-render_shared_ex_rankings()
+render_shared_ex_rankings(uploaded, ratings)
 render_ex_rating_info()

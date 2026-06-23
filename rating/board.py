@@ -3,6 +3,7 @@ from io import StringIO
 from pathlib import Path
 
 from rating.constants import COMPLETION_BONUS, TOP_N
+from rating.formatting import format_rating_display
 from rating.models import ChartRating
 
 EX_BOARD_HEADERS = [
@@ -44,6 +45,14 @@ def get_rating_boards(
     return ex_total, standard_total, ex_top, standard_top
 
 
+def player_ex_rating_with_completion(
+    ratings: list[ChartRating],
+    top_n: int = TOP_N,
+) -> float:
+    ex_total, _, _, _ = get_rating_boards(ratings, top_n)
+    return ex_total + COMPLETION_BONUS
+
+
 def format_rating_board_csv(
     ratings: list[ChartRating],
     top_n: int = TOP_N,
@@ -52,8 +61,8 @@ def format_rating_board_csv(
     buffer = StringIO()
     writer = csv.writer(buffer)
 
-    writer.writerow(["Player EX Rating", f"{ex_total:.3f}"])
-    writer.writerow(["(w/ 2.0 Completion)", f"{ex_total + COMPLETION_BONUS:.3f}"])
+    writer.writerow(["Player EX Rating", format_rating_display(ex_total)])
+    writer.writerow(["(w/ 2.0 Completion)", format_rating_display(ex_total + COMPLETION_BONUS)])
     writer.writerow(EX_BOARD_HEADERS)
     for rank, chart in enumerate(ex_top, 1):
         writer.writerow(_ex_row(rank, chart))
@@ -61,8 +70,8 @@ def format_rating_board_csv(
     writer.writerow([])
     writer.writerow([])
 
-    writer.writerow(["Player Rating", f"{standard_total:.3f}"])
-    writer.writerow(["(w/ 2.0 Completion)", f"{standard_total + COMPLETION_BONUS:.3f}"])
+    writer.writerow(["Player Rating", format_rating_display(standard_total)])
+    writer.writerow(["(w/ 2.0 Completion)", format_rating_display(standard_total + COMPLETION_BONUS)])
     writer.writerow(STANDARD_BOARD_HEADERS)
     for rank, chart in enumerate(standard_top, 1):
         writer.writerow(_standard_row(rank, chart))
@@ -91,7 +100,7 @@ def _ex_row(rank: int, chart: ChartRating) -> list:
         chart.max_score,
         f"{chart.ex_accuracy:.2f}",
         chart.ex_grade,
-        f"{chart.ex_rating:.3f}",
+        format_rating_display(chart.ex_rating),
     ]
 
 
@@ -103,5 +112,5 @@ def _standard_row(rank: int, chart: ChartRating) -> list:
         chart.level,
         f"{chart.standard_accuracy:.2f}",
         chart.standard_grade,
-        f"{chart.standard_rating:.3f}",
+        format_rating_display(chart.standard_rating),
     ]
