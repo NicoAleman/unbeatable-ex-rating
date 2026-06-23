@@ -97,28 +97,30 @@ def render_shared_ex_rankings() -> None:
     st.divider()
 
     st.subheader("Shared EX Ratings")
-    st.caption(
-        "Updated manually by Nico. Share your EX Rating or arcade-highscores.json with Nico to be included."
-    )
 
-    rankings = load_shared_ex_rankings()
-    st.dataframe(
-        [
-            {
-                "Rank": rank,
-                "Player": entry.player,
-                "EX Rating": f"{entry.ex_rating:.3f}",
-                "Date Added": format_date_added(entry.date_added),
-            }
-            for rank, entry in enumerate(rankings, 1)
-        ],
-        width="content",
-        hide_index=True,
-    )
+    with st.container(key="shared-ex-rankings-content", width="content"):
+        st.caption(
+            "Updated manually by Nico. Share your EX Rating or arcade-highscores.json with Nico to be included."
+        )
 
-    last_updated = shared_rankings_last_updated()
-    if last_updated is not None:
-        st.caption(f"Last updated {format_shared_rankings_last_updated(last_updated)}")
+        rankings = load_shared_ex_rankings()
+        st.dataframe(
+            [
+                {
+                    "Rank": rank,
+                    "Player": entry.player,
+                    "EX Rating": f"{entry.ex_rating:.3f}",
+                    "Date Added": format_date_added(entry.date_added),
+                }
+                for rank, entry in enumerate(rankings, 1)
+            ],
+            width="content",
+            hide_index=True,
+        )
+
+        last_updated = shared_rankings_last_updated()
+        if last_updated is not None:
+            st.caption(f"Last updated {format_shared_rankings_last_updated(last_updated)}")
 
 
 def render_ex_rating_info() -> None:
