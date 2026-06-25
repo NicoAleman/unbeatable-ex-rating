@@ -194,6 +194,20 @@ st.markdown(
         padding: 0.85rem 1rem;
         text-align: center;
     }}
+    [data-testid="stMarkdownContainer"]:has(.potential-gains-slider-divider) {{
+        display: flex !important;
+        align-items: stretch !important;
+        height: 100% !important;
+        margin: 0 !important;
+        padding: 0 !important;
+    }}
+    .potential-gains-slider-divider {{
+        border-left: 1px solid rgba(250, 250, 250, 0.2);
+        height: 100%;
+        min-height: 4.5rem;
+        margin: 0 auto;
+        width: 0;
+    }}
     @media (min-width: {SHARED_RANKINGS_SIDE_BY_SIDE_MIN_PX}px) {{
         .st-key-shared-rankings-outer .st-key-shared-ex-leaderboard {{
             margin-right: 1.5rem !important;
@@ -227,6 +241,19 @@ st.markdown(
 )
 
 
+def _target_accuracy_options() -> list[float]:
+    options = [float(value) for value in range(80, 98)]
+    options.extend(98 + 0.25 * step for step in range(9))
+    return options
+
+
+def _format_target_accuracy(value: float) -> str:
+    if value == int(value):
+        return f"{int(value)}%"
+    text = f"{value:.2f}".rstrip("0").rstrip(".")
+    return f"{text}%"
+
+
 def _render_potential_gains_expander(
     ratings: list[ChartRating],
     rating_attr: str,
@@ -234,15 +261,39 @@ def _render_potential_gains_expander(
     key: str,
     expander_label: str = "Potential Gains from 100%'s",
     potential_column_label: str = "Potential Rating",
+    target_accuracy_label: str = "Target Accuracy",
 ) -> None:
     with st.expander(expander_label, expanded=False):
-        level_cap = st.select_slider(
-            "Level Cap",
-            options=list(range(1, 26)),
-            value=25,
-            key=f"{key}-level-cap",
+        level_cap_col, divider_col, target_accuracy_col = st.columns(
+            [1, 0.04, 1],
+            vertical_alignment="center",
         )
-        gains = potential_gains_from_perfect(ratings, rating_attr, level_cap=level_cap)
+        with level_cap_col:
+            level_cap = st.select_slider(
+                "Level Cap",
+                options=list(range(10, 26)),
+                value=25,
+                key=f"{key}-level-cap",
+            )
+        with divider_col:
+            st.markdown(
+                '<div class="potential-gains-slider-divider"></div>',
+                unsafe_allow_html=True,
+            )
+        with target_accuracy_col:
+            target_accuracy = st.select_slider(
+                target_accuracy_label,
+                options=_target_accuracy_options(),
+                value=100.0,
+                format_func=_format_target_accuracy,
+                key=f"{key}-target-accuracy",
+            )
+        gains = potential_gains_from_perfect(
+            ratings,
+            rating_attr,
+            level_cap=level_cap,
+            target_accuracy=float(target_accuracy),
+        )
         if not gains:
             st.caption(
                 f"No charts at or below level {level_cap} with potential rating to gain."
@@ -263,7 +314,7 @@ def _render_potential_gains_expander(
             ],
             use_container_width=True,
             hide_index=True,
-            height=LEADERBOARD_TABLE_HEIGHT,
+            height=min((len(gains) + 1) * TABLE_ROW_HEIGHT, LEADERBOARD_TABLE_HEIGHT),
             key=key,
         )
 
@@ -736,6 +787,7 @@ else:
                             key="ex-potential-gains",
                             expander_label="Potential Gains from EX 100%'s",
                             potential_column_label="Potential EX Rating",
+                            target_accuracy_label="Target EX Accuracy",
                         )
 
                     with st.container(border=True, key="std-rating-board"):
@@ -765,6 +817,7 @@ else:
                             ratings,
                             "standard_rating",
                             key="std-potential-gains",
+                            target_accuracy_label="Target Accuracy",
                         )
 
                 st.download_button(

@@ -41,10 +41,15 @@ def _top_n_sum(values: list[float], n: int = TOP_N) -> float:
     return sum(sorted(values, reverse=True)[:n])
 
 
+def target_chart_rating(level: int, target_accuracy: float) -> float:
+    """Rating for a hypothetical score at target accuracy with no misses."""
+    bonus = compute_grade_bonus(target_accuracy, 0, True)
+    return song_star_rating(target_accuracy, level, bonus)
+
+
 def perfect_chart_rating(level: int) -> float:
     """Rating for 100% accuracy / EX accuracy with no misses."""
-    bonus = compute_grade_bonus(100.0, 0, True)
-    return song_star_rating(100.0, level, bonus)
+    return target_chart_rating(level, 100.0)
 
 
 @dataclass(frozen=True)
@@ -58,8 +63,9 @@ def potential_gains_from_perfect(
     rating_attr: str,
     top_n: int = TOP_N,
     level_cap: int = 25,
+    target_accuracy: float = 100.0,
 ) -> list[PotentialGain]:
-    """Charts that would add profile rating from a hypothetical 100% on that chart."""
+    """Charts that would add profile rating from a hypothetical score on that chart."""
     current_values = [getattr(chart, rating_attr) for chart in ratings]
     current_total = _top_n_sum(current_values, top_n)
 
@@ -68,12 +74,12 @@ def potential_gains_from_perfect(
         if chart.level > level_cap:
             continue
 
-        perfect_rating = perfect_chart_rating(chart.level)
-        if perfect_rating <= current_values[index]:
+        target_rating = target_chart_rating(chart.level, target_accuracy)
+        if target_rating <= current_values[index]:
             continue
 
         modified_values = list(current_values)
-        modified_values[index] = perfect_rating
+        modified_values[index] = target_rating
         gain = _top_n_sum(modified_values, top_n) - current_total
         if gain > 0:
             gains.append(PotentialGain(chart=chart, potential_gain=gain))
