@@ -29,8 +29,11 @@ importlib.reload(shared_rankings_module)
 COMPLETION_BONUS = constants_module.COMPLETION_BONUS
 DEFAULT_MAX_SCORES_PATH = constants_module.DEFAULT_MAX_SCORES_PATH
 TOP_N = constants_module.TOP_N
+format_potential_gain_display = formatting_module.format_potential_gain_display
 format_rating_display = formatting_module.format_rating_display
 format_song_display_name = formatting_module.format_song_display_name
+potential_gains_from_perfect = board_module.potential_gains_from_perfect
+competition_ranks_for_values = board_module.competition_ranks_for_values
 format_rating_board_csv = board_module.format_rating_board_csv
 player_ex_rating_with_completion = board_module.player_ex_rating_with_completion
 load_shared_ex_rankings = shared_rankings_module.load_shared_ex_rankings
@@ -222,6 +225,47 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
+
+
+def _render_potential_gains_expander(
+    ratings: list[ChartRating],
+    rating_attr: str,
+    *,
+    key: str,
+    expander_label: str = "Potential Gains from 100%'s",
+    potential_column_label: str = "Potential Rating",
+) -> None:
+    with st.expander(expander_label, expanded=False):
+        level_cap = st.select_slider(
+            "Level Cap",
+            options=list(range(1, 26)),
+            value=25,
+            key=f"{key}-level-cap",
+        )
+        gains = potential_gains_from_perfect(ratings, rating_attr, level_cap=level_cap)
+        if not gains:
+            st.caption(
+                f"No charts at or below level {level_cap} with potential rating to gain."
+            )
+            return
+
+        ranks = competition_ranks_for_values([entry.potential_gain for entry in gains])
+        st.dataframe(
+            [
+                {
+                    "Rank": rank,
+                    "Chart": format_song_display_name(entry.chart.song),
+                    "Difficulty": entry.chart.difficulty,
+                    "Level": entry.chart.level,
+                    potential_column_label: format_potential_gain_display(entry.potential_gain),
+                }
+                for rank, entry in zip(ranks, gains, strict=True)
+            ],
+            use_container_width=True,
+            hide_index=True,
+            height=LEADERBOARD_TABLE_HEIGHT,
+            key=key,
+        )
 
 
 def board_header(title: str, rating: str, caption: str | None = None) -> None:
@@ -686,6 +730,13 @@ else:
                             hide_index=True,
                             height=TABLE_HEIGHT,
                         )
+                        _render_potential_gains_expander(
+                            ratings,
+                            "ex_rating",
+                            key="ex-potential-gains",
+                            expander_label="Potential Gains from EX 100%'s",
+                            potential_column_label="Potential EX Rating",
+                        )
 
                     with st.container(border=True, key="std-rating-board"):
                         board_header(
@@ -709,6 +760,11 @@ else:
                             use_container_width=True,
                             hide_index=True,
                             height=TABLE_HEIGHT,
+                        )
+                        _render_potential_gains_expander(
+                            ratings,
+                            "standard_rating",
+                            key="std-potential-gains",
                         )
 
                 st.download_button(

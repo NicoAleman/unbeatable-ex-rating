@@ -2,8 +2,11 @@ import csv
 from io import StringIO
 from pathlib import Path
 
+from dataclasses import dataclass
+
 from rating.constants import COMPLETION_BONUS, TOP_N
 from rating.formatting import format_rating_display, format_song_display_name
+from rating.formulas import compute_grade_bonus, song_star_rating
 from rating.models import ChartRating
 
 EX_BOARD_HEADERS = [
@@ -32,6 +35,64 @@ STANDARD_BOARD_HEADERS = [
 
 def _top_by(ratings: list[ChartRating], key: str, n: int = TOP_N) -> list[ChartRating]:
     return sorted(ratings, key=lambda chart: getattr(chart, key), reverse=True)[:n]
+
+
+def _top_n_sum(values: list[float], n: int = TOP_N) -> float:
+    return sum(sorted(values, reverse=True)[:n])
+
+
+def perfect_chart_rating(level: int) -> float:
+    """Rating for 100% accuracy / EX accuracy with no misses."""
+    bonus = compute_grade_bonus(100.0, 0, True)
+    return song_star_rating(100.0, level, bonus)
+
+
+@dataclass(frozen=True)
+class PotentialGain:
+    chart: ChartRating
+    potential_gain: float
+
+
+def potential_gains_from_perfect(
+    ratings: list[ChartRating],
+    rating_attr: str,
+    top_n: int = TOP_N,
+    level_cap: int = 25,
+) -> list[PotentialGain]:
+    """Charts that would add profile rating from a hypothetical 100% on that chart."""
+    current_values = [getattr(chart, rating_attr) for chart in ratings]
+    current_total = _top_n_sum(current_values, top_n)
+
+    gains: list[PotentialGain] = []
+    for index, chart in enumerate(ratings):
+        if chart.level > level_cap:
+            continue
+
+        perfect_rating = perfect_chart_rating(chart.level)
+        if perfect_rating <= current_values[index]:
+            continue
+
+        modified_values = list(current_values)
+        modified_values[index] = perfect_rating
+        gain = _top_n_sum(modified_values, top_n) - current_total
+        if gain > 0:
+            gains.append(PotentialGain(chart=chart, potential_gain=gain))
+
+    gains.sort(key=lambda entry: entry.potential_gain, reverse=True)
+    return gains
+
+
+def competition_ranks_for_values(values: list[float]) -> list[int]:
+    """Tied values share a rank; the next rank skips (e.g. 1, 1, 3)."""
+    if not values:
+        return []
+    ranks = [1]
+    for index in range(1, len(values)):
+        if values[index] == values[index - 1]:
+            ranks.append(ranks[-1])
+        else:
+            ranks.append(index + 1)
+    return ranks
 
 
 def get_rating_boards(
