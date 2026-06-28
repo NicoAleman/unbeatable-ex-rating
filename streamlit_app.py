@@ -19,15 +19,18 @@ from rating import data as data_module
 from rating import formatting as formatting_module
 from rating import shared_rankings as shared_rankings_module
 from rating import submissions as submissions_module
+from rating import imported_players as imported_players_module
 
 importlib.reload(data_module)
 importlib.reload(formatting_module)
 importlib.reload(board_module)
 importlib.reload(submissions_module)
 importlib.reload(shared_rankings_module)
+importlib.reload(imported_players_module)
 
 COMPLETION_BONUS = constants_module.COMPLETION_BONUS
 DEFAULT_MAX_SCORES_PATH = constants_module.DEFAULT_MAX_SCORES_PATH
+FULL_EX_RATING_LEADERBOARD_PATH = constants_module.FULL_EX_RATING_LEADERBOARD_PATH
 TOP_N = constants_module.TOP_N
 format_potential_gain_display = formatting_module.format_potential_gain_display
 format_rating_display = formatting_module.format_rating_display
@@ -44,6 +47,7 @@ validate_rating_submission = shared_rankings_module.validate_rating_submission
 pending_submission_url = submissions_module.pending_submission_url
 submit_ranking = submissions_module.submit_ranking
 submit_pending_ranking = submissions_module.submit_pending_ranking
+load_full_ex_leaderboard_csv = imported_players_module.load_full_ex_leaderboard_csv
 
 _DATE_FORMATS = ("%Y-%m-%d", "%m/%d/%Y", "%m/%d/%y", "%B %d, %Y", "%b %d, %Y")
 
@@ -133,6 +137,36 @@ st.markdown(
     .st-key-shared-rankings-outer .st-key-shared-ex-leaderboard {{
         flex: 0 0 auto !important;
         width: auto !important;
+        max-width: 100% !important;
+    }}
+    .st-key-full-ex-leaderboard-outer {{
+        width: fit-content !important;
+        max-width: 100% !important;
+    }}
+    .st-key-full-ex-leaderboard-body {{
+        display: flex !important;
+        flex-direction: column-reverse !important;
+        align-items: stretch !important;
+        width: fit-content !important;
+        max-width: 100% !important;
+    }}
+    .st-key-full-ex-leaderboard-search {{
+        width: 100% !important;
+    }}
+    .st-key-full-ex-leaderboard-table {{
+        width: fit-content !important;
+        max-width: 100% !important;
+    }}
+    .st-key-full-ex-leaderboard-body [data-testid="stTextInput"],
+    .st-key-full-ex-leaderboard-body [data-testid="stTextInput"] > div,
+    .st-key-full-ex-leaderboard-body [data-testid="stTextInput"] input {{
+        width: 100% !important;
+        max-width: 100% !important;
+        box-sizing: border-box !important;
+    }}
+    .st-key-full-ex-leaderboard-body [data-testid="stDataFrame"],
+    .st-key-full-ex-leaderboard-body [data-testid="stDataFrameResizable"] {{
+        width: fit-content !important;
         max-width: 100% !important;
     }}
     .st-key-shared-rankings-outer .st-key-submit-ex-rating-panel {{
@@ -452,6 +486,80 @@ def _render_leaderboard_table(rankings: list) -> None:
         hide_index=True,
         height=LEADERBOARD_TABLE_HEIGHT,
     )
+
+
+def _render_full_ex_leaderboard_table(rankings: list) -> None:
+    table_height = min((len(rankings) + 1) * TABLE_ROW_HEIGHT, LEADERBOARD_TABLE_HEIGHT)
+    st.dataframe(
+        [
+            {
+                "Rank": entry.rank,
+                "Player": entry.player,
+                "EX Rating": format_rating_display(entry.ex_rating),
+            }
+            for entry in rankings
+        ],
+        width="content",
+        hide_index=True,
+        height=table_height,
+    )
+
+
+def render_full_ex_rating_leaderboard() -> None:
+    st.divider()
+
+    with st.container(key="full-ex-leaderboard-outer", width="content"):
+        st.subheader("\*WIP* Full EX Rating Leaderboard (Incomplete)")
+        st.caption(
+            "Estimated EX Ratings from imported leaderboard scores. "
+            "This list is incomplete and may change as more player data is added."
+        )
+        st.markdown(
+            '<p style="font-size: 1.125rem; font-weight: 700; margin: 0.25rem 0 0.75rem 0;">'
+            "Note: Ratings are as of June 27th, 2026."
+            "</p>",
+            unsafe_allow_html=True,
+        )
+
+        if not FULL_EX_RATING_LEADERBOARD_PATH.exists():
+            st.warning(
+                "Full EX rating leaderboard data has not been generated yet. "
+                "Run `python generate_full_ex_leaderboard.py` to build it."
+            )
+            return
+
+        try:
+            rankings = load_full_ex_leaderboard_csv()
+        except Exception as error:
+            st.error(f"Could not load full EX rating leaderboard: {error}")
+            return
+
+        if not rankings:
+            st.info("No players found in the full EX rating leaderboard.")
+            return
+
+        with st.container(key="full-ex-leaderboard-body", width="content"):
+            search_query = st.session_state.get("full-ex-leaderboard-search-input", "").strip()
+            if search_query:
+                query = search_query.casefold()
+                filtered_rankings = [
+                    entry for entry in rankings if query in entry.player.casefold()
+                ]
+            else:
+                filtered_rankings = rankings
+
+            with st.container(key="full-ex-leaderboard-table"):
+                if not filtered_rankings:
+                    st.caption("No players match your search.")
+                else:
+                    _render_full_ex_leaderboard_table(filtered_rankings)
+
+            with st.container(key="full-ex-leaderboard-search"):
+                st.text_input(
+                    "Search players",
+                    placeholder="Search by player name…",
+                    key="full-ex-leaderboard-search-input",
+                )
 
 
 def _render_submission_panel(
@@ -828,4 +936,5 @@ else:
                 )
 
 render_shared_ex_rankings(uploaded, ratings)
+render_full_ex_rating_leaderboard()
 render_ex_rating_info()
