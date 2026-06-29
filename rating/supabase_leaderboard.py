@@ -12,7 +12,9 @@ from rating.constants import (
     TOP_SCORES_SYNC_PLAYER_COUNT,
 )
 from rating.ex_leaderboard_db import _connect as connect_sqlite
-from rating.baseline_leaderboard import UpdatedRating
+from rating.baseline_leaderboard import UpdatedRating, load_baseline_leaderboard_csv
+from rating.constants import EX_RATING_BASELINE_PATH
+from rating.imported_players import build_ratings_from_stored_scores
 from rating.supabase_config import get_supabase_db_url, supabase_configured
 
 BATCH_SIZE = 2000
@@ -96,6 +98,91 @@ def load_submission_scores_from_supabase(
         return []
     finally:
         conn.close()
+
+
+def load_players_with_scores_from_supabase(
+    db_url: str | None = None,
+    baseline_path=EX_RATING_BASELINE_PATH,
+) -> list[dict[str, object]]:
+    """Players with stored chart scores, including display names from baseline CSV."""
+    if not supabase_configured() and not db_url:
+        return []
+
+    conn = _connect_postgres(db_url)
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            cur.execute(
+                """
+                SELECT player_id, COUNT(*) AS chart_count
+                FROM scores
+                GROUP BY player_id
+                ORDER BY player_id
+                """
+            )
+            rows = cur.fetchall()
+    except psycopg2.errors.UndefinedTable:
+        return []
+    finally:
+        conn.close()
+
+    display_names = {
+        entry.player_id: entry.display_name
+        for entry in load_baseline_leaderboard_csv(baseline_path)
+    }
+
+    players: list[dict[str, object]] = []
+    for row in rows:
+        player_id = str(row["player_id"])
+        players.append(
+            {
+                "player_id": player_id,
+                "display_name": display_names.get(player_id, player_id),
+                "chart_count": int(row["chart_count"]),
+            }
+        )
+
+    players.sort(
+        key=lambda player: (str(player["display_name"]).casefold(), str(player["player_id"])),
+    )
+    return players
+
+
+def load_player_scores_from_supabase(
+    player_id: str,
+    db_url: str | None = None,
+) -> list[dict[str, object]]:
+    if not player_id.strip():
+        return []
+    if not supabase_configured() and not db_url:
+        return []
+
+    conn = _connect_postgres(db_url)
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            cur.execute(
+                """
+                SELECT song, difficulty, score
+                FROM scores
+                WHERE player_id = %s
+                ORDER BY song, difficulty
+                """,
+                (player_id.strip(),),
+            )
+            return [dict(row) for row in cur.fetchall()]
+    except psycopg2.errors.UndefinedTable:
+        return []
+    finally:
+        conn.close()
+
+
+def load_player_ratings_from_supabase(
+    player_id: str,
+    db_url: str | None = None,
+) -> list:
+    score_rows = load_player_scores_from_supabase(player_id, db_url=db_url)
+    if not score_rows:
+        return []
+    return build_ratings_from_stored_scores(score_rows)
 
 
 def sync_top_scores_to_supabase(

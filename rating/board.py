@@ -22,6 +22,10 @@ EX_BOARD_HEADERS = [
     "EX Rating",
 ]
 
+EX_BOARD_HEADERS_WITHOUT_ACCURACY = [
+    header for header in EX_BOARD_HEADERS if header != "Accuracy"
+]
+
 STANDARD_BOARD_HEADERS = [
     "Rank",
     "Chart",
@@ -120,6 +124,26 @@ def player_ex_rating_with_completion(
     return ex_total + COMPLETION_BONUS
 
 
+def format_ex_rating_board_csv(
+    ratings: list[ChartRating],
+    top_n: int = TOP_N,
+    *,
+    include_accuracy: bool = False,
+) -> str:
+    ex_total, _, ex_top, _ = get_rating_boards(ratings, top_n)
+    buffer = StringIO()
+    writer = csv.writer(buffer)
+    headers = EX_BOARD_HEADERS if include_accuracy else EX_BOARD_HEADERS_WITHOUT_ACCURACY
+
+    writer.writerow(["Player EX Rating", format_rating_display(ex_total)])
+    writer.writerow(["(w/ 2.0 Completion)", format_rating_display(ex_total + COMPLETION_BONUS)])
+    writer.writerow(headers)
+    for rank, chart in enumerate(ex_top, 1):
+        writer.writerow(_ex_row(rank, chart, include_accuracy=include_accuracy))
+
+    return buffer.getvalue()
+
+
 def format_rating_board_csv(
     ratings: list[ChartRating],
     top_n: int = TOP_N,
@@ -156,19 +180,25 @@ def write_rating_board(
     return ex_total, standard_total
 
 
-def _ex_row(rank: int, chart: ChartRating) -> list:
-    return [
+def _ex_row(rank: int, chart: ChartRating, *, include_accuracy: bool = True) -> list:
+    row = [
         rank,
         format_song_display_name(chart.song),
         chart.difficulty,
         chart.level,
-        f"{chart.standard_accuracy:.2f}",
-        chart.score,
-        chart.max_score,
-        f"{chart.ex_accuracy:.2f}",
-        chart.ex_grade,
-        format_rating_display(chart.ex_rating),
     ]
+    if include_accuracy:
+        row.append(f"{chart.standard_accuracy:.2f}")
+    row.extend(
+        [
+            chart.score,
+            chart.max_score,
+            f"{chart.ex_accuracy:.2f}",
+            chart.ex_grade,
+            format_rating_display(chart.ex_rating),
+        ]
+    )
+    return row
 
 
 def _standard_row(rank: int, chart: ChartRating) -> list:

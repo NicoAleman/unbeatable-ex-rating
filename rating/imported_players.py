@@ -90,6 +90,39 @@ def build_ratings_from_imported_player(
     return list(best_by_chart.values())
 
 
+def build_ratings_from_stored_scores(
+    score_rows: list[dict[str, object]],
+    max_scores_path: Path = DEFAULT_MAX_SCORES_PATH,
+    chart_rating_levels: dict[str, int] | None = None,
+) -> list[ChartRating]:
+    """Build chart ratings from stored leaderboard scores (song, difficulty, score)."""
+    max_scores = load_critical_max_scores(max_scores_path)
+    levels = chart_rating_levels if chart_rating_levels is not None else load_chart_rating_levels()
+    best_by_chart: dict[str, ChartRating] = {}
+
+    for row in score_rows:
+        song = str(row.get("song", "")).strip()
+        difficulty = str(row.get("difficulty", "")).strip()
+        if not song or not difficulty:
+            continue
+
+        chart_key = resolve_max_score_chart_key(song, difficulty, max_scores)
+        if chart_key is None:
+            continue
+
+        level = resolve_chart_rating_level(chart_key, levels)
+        if level is None:
+            continue
+
+        entry = _leaderboard_score_to_highscore_entry({"score": row.get("score", 0)}, chart_key, level)
+        rating = rate_chart(entry, max_scores[chart_key])
+        existing = best_by_chart.get(chart_key)
+        if existing is None or rating.ex_rating > existing.ex_rating:
+            best_by_chart[chart_key] = rating
+
+    return list(best_by_chart.values())
+
+
 def build_full_ex_rankings(
     leaderboard_scores_dir: Path = LEADERBOARDS_JUNE27_DIR,
     max_scores_path: Path = DEFAULT_MAX_SCORES_PATH,

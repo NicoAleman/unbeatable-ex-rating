@@ -22,6 +22,7 @@ from rating import imported_players as imported_players_module
 from rating import ex_leaderboard_db as ex_leaderboard_db_module
 from rating import full_ex_submissions as full_ex_submissions_module
 from rating import public_leaderboard as public_leaderboard_module
+from rating import supabase_leaderboard as supabase_leaderboard_module
 from rating.supabase_config import supabase_configured
 
 importlib.reload(data_module)
@@ -32,6 +33,7 @@ importlib.reload(imported_players_module)
 importlib.reload(ex_leaderboard_db_module)
 importlib.reload(public_leaderboard_module)
 importlib.reload(full_ex_submissions_module)
+importlib.reload(supabase_leaderboard_module)
 
 COMPLETION_BONUS = constants_module.COMPLETION_BONUS
 DEFAULT_MAX_SCORES_PATH = constants_module.DEFAULT_MAX_SCORES_PATH
@@ -45,6 +47,7 @@ format_song_display_name = formatting_module.format_song_display_name
 potential_gains_from_perfect = board_module.potential_gains_from_perfect
 competition_ranks_for_values = board_module.competition_ranks_for_values
 format_rating_board_csv = board_module.format_rating_board_csv
+format_ex_rating_board_csv = board_module.format_ex_rating_board_csv
 player_ex_rating_with_completion = board_module.player_ex_rating_with_completion
 load_ex_leaderboard = public_leaderboard_module.load_ex_leaderboard
 load_ex_leaderboard_with_warning = public_leaderboard_module.load_ex_leaderboard_with_warning
@@ -52,6 +55,8 @@ leaderboard_available = public_leaderboard_module.leaderboard_available
 SUPABASE_LOAD_ERROR_MESSAGE = public_leaderboard_module.SUPABASE_LOAD_ERROR_MESSAGE
 validate_full_ex_rating_submission = full_ex_submissions_module.validate_full_ex_rating_submission
 submit_full_ex_rating_update = full_ex_submissions_module.submit_full_ex_rating_update
+load_players_with_scores_from_supabase = supabase_leaderboard_module.load_players_with_scores_from_supabase
+load_player_ratings_from_supabase = supabase_leaderboard_module.load_player_ratings_from_supabase
 
 _DATE_FORMATS = ("%Y-%m-%d", "%m/%d/%Y", "%m/%d/%y", "%B %d, %Y", "%b %d, %Y")
 
@@ -355,17 +360,31 @@ def _render_potential_gains_expander(
         )
 
 
-def board_header(title: str, rating: str, caption: str | None = None) -> None:
+def board_header(
+    title: str,
+    rating: str,
+    caption: str | None = None,
+    as_of: str | None = None,
+) -> None:
     caption_html = (
         f'<span style="font-size: 0.85rem; color: #a0a0a0; margin-left: 0.75rem;">{caption}</span>'
         if caption
         else ""
     )
+    as_of_html = (
+        f'<span style="font-size: 0.95rem; font-weight: 400; color: #a0a0a0; '
+        f'margin-left: 0.4rem;">as of {as_of}</span>'
+        if as_of
+        else ""
+    )
 
     st.markdown(
         f"""
-        <p style="text-decoration: underline; font-size: 1.375rem; font-weight: 600;
-                  margin: 0 0 0.35rem 0;">{title}</p>
+        <div style="display: flex; align-items: baseline; margin: 0 0 0.35rem 0;">
+            <p style="text-decoration: underline; font-size: 1.375rem; font-weight: 600;
+                      margin: 0;">{title}</p>
+            {as_of_html}
+        </div>
         <div style="display: flex; align-items: baseline; margin: 0 0 0.5rem 0;
                     min-height: 2.5rem;">
             <span style="font-size: 2rem; font-weight: 700; line-height: 1;">{rating}</span>
@@ -373,6 +392,173 @@ def board_header(title: str, rating: str, caption: str | None = None) -> None:
         </div>
         """,
         unsafe_allow_html=True,
+    )
+
+
+@st.cache_data(ttl=300)
+def _load_players_with_scores() -> list[dict[str, object]] | None:
+    try:
+        players = load_players_with_scores_from_supabase()
+        if not players:
+            return players
+        rankings, _ = load_ex_leaderboard_with_warning()
+        rank_by_id = {entry.player_id: entry.rank for entry in rankings}
+        last_updated_by_id = {entry.player_id: entry.last_updated for entry in rankings}
+        return [
+            {
+                **player,
+                "rank": rank_by_id.get(str(player["player_id"])),
+                "last_updated": last_updated_by_id.get(str(player["player_id"])),
+            }
+            for player in players
+        ]
+    except Exception:
+        return None
+
+
+@st.cache_data(ttl=300)
+def _load_player_board_ratings(player_id: str) -> list[ChartRating]:
+    return load_player_ratings_from_supabase(player_id)
+
+
+def _board_player_option_label(player: dict[str, object]) -> str:
+    rank = player.get("rank")
+    if rank:
+        return f'{player["display_name"]} (#{rank})'
+    return str(player["display_name"])
+
+
+def _find_board_player(
+    players: list[dict[str, object]],
+    *,
+    option_label: str = "",
+) -> dict[str, object] | None:
+    if not option_label or option_label == BOARD_PLAYER_SELECT_PLACEHOLDER:
+        return None
+    for player in players:
+        if _board_player_option_label(player) == option_label:
+            return player
+    return None
+
+
+def _ex_board_table_row(
+    rank: int,
+    chart: ChartRating,
+    *,
+    include_accuracy: bool,
+) -> dict[str, object]:
+    row: dict[str, object] = {
+        "Rank": rank,
+        "Chart": format_song_display_name(chart.song),
+        "Difficulty": chart.difficulty,
+        "Level": chart.level,
+    }
+    if include_accuracy:
+        row["Accuracy"] = f"{chart.standard_accuracy:.2f}"
+    row.update(
+        {
+            "Score": chart.score,
+            "Max Score": chart.max_score,
+            "EX Accuracy": f"{chart.ex_accuracy:.2f}",
+            "EX Grade": chart.ex_grade,
+            "EX Rating": format_rating_display(chart.ex_rating),
+        }
+    )
+    return row
+
+
+def _render_rating_boards(
+    ratings: list[ChartRating],
+    *,
+    csv_file_name: str = "ex_rating_board.csv",
+    include_standard: bool = True,
+    as_of: str | None = None,
+) -> None:
+    _, standard_total, ex_top, standard_top = get_rating_boards(ratings)
+    ex_with_completion = player_ex_rating_with_completion(ratings)
+    standard_with_completion = standard_total + COMPLETION_BONUS
+
+    if include_standard:
+        board_layout = st.container(
+            key="rating-boards-layout",
+            horizontal=True,
+            gap="medium",
+            vertical_alignment="top",
+        )
+    else:
+        board_layout = st.container(key="rating-boards-layout")
+
+    with board_layout:
+        with st.container(border=True, key="ex-rating-board"):
+            board_header(
+                "EX Rating",
+                format_rating_display(ex_with_completion),
+                "Includes +2.0 completion bonus",
+                as_of=format_last_updated(as_of) if as_of else None,
+            )
+            st.dataframe(
+                [
+                    _ex_board_table_row(
+                        rank,
+                        chart,
+                        include_accuracy=include_standard,
+                    )
+                    for rank, chart in enumerate(ex_top, 1)
+                ],
+                use_container_width=True,
+                hide_index=True,
+                height=TABLE_HEIGHT,
+            )
+            _render_potential_gains_expander(
+                ratings,
+                "ex_rating",
+                key="ex-potential-gains",
+                expander_label="Potential Gains from EX 100%'s",
+                potential_column_label="Potential EX Rating",
+                target_accuracy_label="Target EX Accuracy",
+            )
+
+        if include_standard:
+            with st.container(border=True, key="std-rating-board"):
+                board_header(
+                    "Standard Rating",
+                    format_rating_display(standard_with_completion),
+                    "Includes +2.0 completion bonus",
+                )
+                st.dataframe(
+                    [
+                        {
+                            "Rank": rank,
+                            "Chart": format_song_display_name(chart.song),
+                            "Difficulty": chart.difficulty,
+                            "Level": chart.level,
+                            "Accuracy": f"{chart.standard_accuracy:.2f}",
+                            "Grade": chart.standard_grade,
+                            "Rating": format_rating_display(chart.standard_rating),
+                        }
+                        for rank, chart in enumerate(standard_top, 1)
+                    ],
+                    use_container_width=True,
+                    hide_index=True,
+                    height=TABLE_HEIGHT,
+                )
+                _render_potential_gains_expander(
+                    ratings,
+                    "standard_rating",
+                    key="std-potential-gains",
+                    target_accuracy_label="Target Accuracy",
+                )
+
+    csv_data = (
+        format_rating_board_csv(ratings)
+        if include_standard
+        else format_ex_rating_board_csv(ratings)
+    )
+    st.download_button(
+        label="Download full board (CSV)",
+        data=csv_data.encode("utf-8"),
+        file_name=csv_file_name,
+        mime="text/csv",
     )
 
 
@@ -430,6 +616,8 @@ def _load_ratings_from_upload(
 
 FULL_EX_PLAYER_SELECT_PLACEHOLDER = "— Select a player —"
 FULL_EX_SUBMIT_PLAYER_SEARCH_LIMIT = 50
+BOARD_PLAYER_SELECT_PLACEHOLDER = "— Select a player —"
+BOARD_PLAYER_SEARCH_LIMIT = 50
 
 
 def _render_submission_using_line(filename: str, from_above: bool) -> None:
@@ -832,7 +1020,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 st.markdown(
-    "Upload your **arcade-highscores.json** to see your EX and Standard rating boards. "
+    "Upload your **arcade-highscores.json** or search for a player to see rating boards. "
     "Only Classic speed charts are rated (no Double Time / Half Time or custom charts)."
 )
 st.markdown(
@@ -840,107 +1028,108 @@ st.markdown(
     "`C:\\Users\\<YourName>\\AppData\\LocalLow\\D-CELL GAMES\\UNBEATABLE\\PROFILES\\<profile>\\arcade-highscores.json`. "
 )
 
-uploaded = st.file_uploader("arcade-highscores.json", type="json", key="arcade-highscores")
+board_source_options = ["Upload file"]
+if supabase_configured():
+    board_source_options.append("Search player")
+
+board_source = st.radio(
+    "View boards from",
+    options=board_source_options,
+    horizontal=True,
+    key="board-source-mode",
+)
+
+uploaded = None
 ratings: list[ChartRating] | None = None
 
-if uploaded is None:
-    st.info("Choose your arcade highscores file to get started.")
-else:
-    try:
-        highscores = json.loads(uploaded.getvalue().decode("utf-8"))
-    except json.JSONDecodeError:
-        st.error("That file doesn't look like valid JSON. Make sure you're uploading arcade-highscores.json.")
+if board_source == "Upload file":
+    uploaded = st.file_uploader("arcade-highscores.json", type="json", key="arcade-highscores")
+
+    if uploaded is None:
+        st.info("Choose your arcade highscores file to get started.")
     else:
-        if "highScores" not in highscores:
-            st.error("Missing `highScores` in the JSON. Is this the right file?")
+        try:
+            highscores = json.loads(uploaded.getvalue().decode("utf-8"))
+        except json.JSONDecodeError:
+            st.error("That file doesn't look like valid JSON. Make sure you're uploading arcade-highscores.json.")
         else:
-            with st.spinner("Calculating ratings…"):
-                ratings = build_ratings(highscores, DEFAULT_MAX_SCORES_PATH)
-
-            if not ratings:
-                st.warning("No rated charts found. Check that your file has Classic mode scores for known charts.")
+            if "highScores" not in highscores:
+                st.error("Missing `highScores` in the JSON. Is this the right file?")
             else:
-                _, standard_total, ex_top, standard_top = get_rating_boards(ratings)
-                ex_with_completion = player_ex_rating_with_completion(ratings)
-                standard_with_completion = standard_total + COMPLETION_BONUS
+                with st.spinner("Calculating ratings…"):
+                    ratings = build_ratings(highscores, DEFAULT_MAX_SCORES_PATH)
 
-                with st.container(
-                    key="rating-boards-layout",
-                    horizontal=True,
-                    gap="medium",
-                    vertical_alignment="top",
-                ):
-                    with st.container(border=True, key="ex-rating-board"):
-                        board_header(
-                            "EX Rating",
-                            format_rating_display(ex_with_completion),
-                            "Includes +2.0 completion bonus",
-                        )
-                        st.dataframe(
-                            [
-                                {
-                                    "Rank": rank,
-                                    "Chart": format_song_display_name(chart.song),
-                                    "Difficulty": chart.difficulty,
-                                    "Level": chart.level,
-                                    "Accuracy": f"{chart.standard_accuracy:.2f}",
-                                    "Score": chart.score,
-                                    "Max Score": chart.max_score,
-                                    "EX Accuracy": f"{chart.ex_accuracy:.2f}",
-                                    "EX Grade": chart.ex_grade,
-                                    "EX Rating": format_rating_display(chart.ex_rating),
-                                }
-                                for rank, chart in enumerate(ex_top, 1)
-                            ],
-                            use_container_width=True,
-                            hide_index=True,
-                            height=TABLE_HEIGHT,
-                        )
-                        _render_potential_gains_expander(
-                            ratings,
-                            "ex_rating",
-                            key="ex-potential-gains",
-                            expander_label="Potential Gains from EX 100%'s",
-                            potential_column_label="Potential EX Rating",
-                            target_accuracy_label="Target EX Accuracy",
-                        )
+                if not ratings:
+                    st.warning(
+                        "No rated charts found. Check that your file has Classic mode scores for known charts."
+                    )
+                else:
+                    _render_rating_boards(ratings)
+else:
+    if not supabase_configured():
+        st.info(
+            "Player search is not set up on this server yet. "
+            "Add `supabase.db_url` to `.streamlit/secrets.toml` "
+            "(see `.streamlit/secrets.toml.example`)."
+        )
+    else:
+        players_with_scores = _load_players_with_scores()
+        if players_with_scores is None:
+            st.error("Could not load players with stored scores.")
+        elif not players_with_scores:
+            st.info("No stored player scores are available yet.")
+        else:
+            player_search = st.text_input(
+                "Search players",
+                placeholder="Search by player name…",
+                key="board-player-search",
+            ).strip()
+            search_needle = player_search.casefold()
 
-                    with st.container(border=True, key="std-rating-board"):
-                        board_header(
-                            "Standard Rating",
-                            format_rating_display(standard_with_completion),
-                            "Includes +2.0 completion bonus",
-                        )
-                        st.dataframe(
-                            [
-                                {
-                                    "Rank": rank,
-                                    "Chart": format_song_display_name(chart.song),
-                                    "Difficulty": chart.difficulty,
-                                    "Level": chart.level,
-                                    "Accuracy": f"{chart.standard_accuracy:.2f}",
-                                    "Grade": chart.standard_grade,
-                                    "Rating": format_rating_display(chart.standard_rating),
-                                }
-                                for rank, chart in enumerate(standard_top, 1)
-                            ],
-                            use_container_width=True,
-                            hide_index=True,
-                            height=TABLE_HEIGHT,
-                        )
-                        _render_potential_gains_expander(
-                            ratings,
-                            "standard_rating",
-                            key="std-potential-gains",
-                            target_accuracy_label="Target Accuracy",
-                        )
-
-                st.download_button(
-                    label="Download full board (CSV)",
-                    data=format_rating_board_csv(ratings).encode("utf-8"),
-                    file_name="ex_rating_board.csv",
-                    mime="text/csv",
+            if not search_needle:
+                st.caption(
+                    f"Search one of {len(players_with_scores)} players with stored scores."
                 )
+                player_options = [BOARD_PLAYER_SELECT_PLACEHOLDER]
+                candidate_players: list[dict[str, object]] = []
+            else:
+                candidate_players = [
+                    player
+                    for player in players_with_scores
+                    if search_needle in str(player["display_name"]).casefold()
+                ][:BOARD_PLAYER_SEARCH_LIMIT]
+                player_options = [BOARD_PLAYER_SELECT_PLACEHOLDER] + [
+                    _board_player_option_label(player) for player in candidate_players
+                ]
+                if not candidate_players:
+                    st.caption("No players match your search.")
+
+            selected_option = st.selectbox(
+                "Player",
+                options=player_options,
+                key="board-player-select",
+                disabled=not search_needle or not candidate_players,
+            )
+            selected_player = _find_board_player(
+                players_with_scores,
+                option_label=selected_option,
+            )
+
+            if selected_player is not None:
+                with st.spinner("Loading player scores…"):
+                    ratings = _load_player_board_ratings(str(selected_player["player_id"]))
+
+                if not ratings:
+                    st.warning("No rated charts found for that player.")
+                else:
+                    safe_name = str(selected_player["display_name"]).strip().replace(" ", "_")
+                    last_updated = selected_player.get("last_updated")
+                    _render_rating_boards(
+                        ratings,
+                        csv_file_name=f"{safe_name}_ex_rating_board.csv",
+                        include_standard=False,
+                        as_of=str(last_updated).strip() if last_updated else None,
+                    )
 
 render_full_ex_rating_leaderboard(uploaded, ratings)
 render_ex_rating_info()
