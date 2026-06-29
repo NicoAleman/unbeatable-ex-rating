@@ -44,15 +44,31 @@ def resolve_max_score_chart_key(
 
 def _leaderboard_score_to_highscore_entry(score: dict, chart_key: str, level: int) -> dict:
     song, difficulty = chart_key.rsplit("/", 1)
+    accuracy_percent = score.get("accuracy")
+    miss_count_value = score.get("miss_count")
+    max_combo = score.get("max_combo")
+    cleared = score.get("cleared")
+    critical_count_value = score.get("critical_count")
+
+    notes: list[dict[str, object]] = []
+    if miss_count_value is not None and int(miss_count_value) > 0:
+        notes.append({"timing": "Miss", "count": int(miss_count_value)})
+    if critical_count_value is not None and int(critical_count_value) > 0:
+        notes.append({"timing": "Critical", "count": int(critical_count_value)})
+
     return {
         "song": f"{song}/{difficulty}\\Classic",
         "score": score.get("score", 0),
         "level": level,
-        "cleared": True,
-        "accuracy": 0,
-        "notes": [],
-        "maxCombo": 1,
+        "cleared": bool(cleared) if cleared is not None else True,
+        "accuracy": float(accuracy_percent) / 100 if accuracy_percent is not None else 0,
+        "notes": notes,
+        "maxCombo": int(max_combo) if max_combo is not None else 1,
     }
+
+
+def stored_scores_have_accuracy(score_rows: list[dict[str, object]]) -> bool:
+    return any(row.get("accuracy") is not None for row in score_rows)
 
 
 def build_ratings_from_imported_player(
@@ -114,7 +130,7 @@ def build_ratings_from_stored_scores(
         if level is None:
             continue
 
-        entry = _leaderboard_score_to_highscore_entry({"score": row.get("score", 0)}, chart_key, level)
+        entry = _leaderboard_score_to_highscore_entry(row, chart_key, level)
         rating = rate_chart(entry, max_scores[chart_key])
         existing = best_by_chart.get(chart_key)
         if existing is None or rating.ex_rating > existing.ex_rating:

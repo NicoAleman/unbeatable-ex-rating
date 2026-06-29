@@ -14,7 +14,10 @@ from rating.constants import (
 from rating.ex_leaderboard_db import _connect as connect_sqlite
 from rating.baseline_leaderboard import UpdatedRating, load_baseline_leaderboard_csv
 from rating.constants import EX_RATING_BASELINE_PATH
-from rating.imported_players import build_ratings_from_stored_scores
+from rating.imported_players import (
+    build_ratings_from_stored_scores,
+    stored_scores_have_accuracy,
+)
 from rating.supabase_config import get_supabase_db_url, supabase_configured
 
 BATCH_SIZE = 2000
@@ -161,7 +164,7 @@ def load_player_scores_from_supabase(
         with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
             cur.execute(
                 """
-                SELECT song, difficulty, score
+                SELECT song, difficulty, score, accuracy, miss_count, max_combo, cleared, critical_count
                 FROM scores
                 WHERE player_id = %s
                 ORDER BY song, difficulty
@@ -178,11 +181,14 @@ def load_player_scores_from_supabase(
 def load_player_ratings_from_supabase(
     player_id: str,
     db_url: str | None = None,
-) -> list:
+) -> tuple[list, bool]:
     score_rows = load_player_scores_from_supabase(player_id, db_url=db_url)
     if not score_rows:
-        return []
-    return build_ratings_from_stored_scores(score_rows)
+        return [], False
+    return (
+        build_ratings_from_stored_scores(score_rows),
+        stored_scores_have_accuracy(score_rows),
+    )
 
 
 def sync_top_scores_to_supabase(
@@ -259,7 +265,7 @@ def submit_player_update_to_supabase(
     player_id: str,
     ex_rating: float,
     last_updated: str,
-    scores: list[tuple[str, str, int]],
+    scores: list[dict[str, object]],
     source: str = SCORE_SOURCE_SUBMISSION,
     db_url: str | None = None,
 ) -> dict[str, int]:
@@ -269,8 +275,19 @@ def submit_player_update_to_supabase(
 
     postgres = _connect_postgres(db_url)
     score_payload = [
-        (player_id, song, difficulty, int(score), source)
-        for song, difficulty, score in scores
+        (
+            player_id,
+            str(score["song"]),
+            str(score["difficulty"]),
+            int(score["score"]),
+            source,
+            score.get("accuracy"),
+            score.get("miss_count"),
+            score.get("max_combo"),
+            score.get("cleared"),
+            score.get("critical_count"),
+        )
+        for score in scores
     ]
 
     with postgres:
@@ -293,11 +310,19 @@ def submit_player_update_to_supabase(
                 psycopg2.extras.execute_batch(
                     cur,
                     """
-                    INSERT INTO scores (player_id, song, difficulty, score, source)
-                    VALUES (%s, %s, %s, %s, %s)
+                    INSERT INTO scores (
+                        player_id, song, difficulty, score, source,
+                        accuracy, miss_count, max_combo, cleared, critical_count
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (player_id, song, difficulty) DO UPDATE SET
                         score = EXCLUDED.score,
-                        source = EXCLUDED.source
+                        source = EXCLUDED.source,
+                        accuracy = EXCLUDED.accuracy,
+                        miss_count = EXCLUDED.miss_count,
+                        max_combo = EXCLUDED.max_combo,
+                        cleared = EXCLUDED.cleared,
+                        critical_count = EXCLUDED.critical_count
                     """,
                     batch,
                     page_size=BATCH_SIZE,

@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 
 from rating.constants import DEFAULT_MAX_SCORES_PATH, SCORE_SOURCE_SUBMISSION
 from rating.data import load_critical_max_scores
-from rating.entries import chart_key, is_classic_entry, split_chart_key
+from rating.entries import chart_key, critical_count, is_classic_entry, miss_count, split_chart_key
 from rating.formatting import format_rating_display
 from rating.imported_players import resolve_max_score_chart_key
 from rating.supabase_config import supabase_configured
@@ -12,10 +12,10 @@ from rating.supabase_leaderboard import submit_player_update_to_supabase
 def extract_classic_chart_scores(
     highscores: dict,
     max_scores_path=DEFAULT_MAX_SCORES_PATH,
-) -> list[tuple[str, str, int]]:
-    """Return best Classic chart scores as (song, difficulty, score) tuples."""
+) -> list[dict[str, object]]:
+    """Return best Classic chart scores with accuracy metadata from a save file."""
     max_scores = load_critical_max_scores(max_scores_path)
-    best_by_chart: dict[tuple[str, str], int] = {}
+    best_by_chart: dict[tuple[str, str], dict[str, object]] = {}
 
     for entry in highscores.get("highScores", []):
         if not is_classic_entry(entry):
@@ -29,13 +29,22 @@ def extract_classic_chart_scores(
         score = int(entry.get("score", 0))
         chart = (song, difficulty)
         existing = best_by_chart.get(chart)
-        if existing is None or score > existing:
-            best_by_chart[chart] = score
+        if existing is not None and score <= int(existing["score"]):
+            continue
 
-    return [
-        (song, difficulty, chart_score)
-        for (song, difficulty), chart_score in sorted(best_by_chart.items())
-    ]
+        accuracy = entry.get("accuracy")
+        best_by_chart[chart] = {
+            "song": song,
+            "difficulty": difficulty,
+            "score": score,
+            "accuracy": float(accuracy) * 100 if accuracy is not None else None,
+            "miss_count": miss_count(entry),
+            "max_combo": int(entry.get("maxCombo", 0)),
+            "cleared": bool(entry.get("cleared", False)),
+            "critical_count": critical_count(entry),
+        }
+
+    return sorted(best_by_chart.values(), key=lambda row: (row["song"], row["difficulty"]))
 
 
 def validate_full_ex_rating_submission(

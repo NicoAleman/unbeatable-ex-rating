@@ -417,7 +417,7 @@ def _load_players_with_scores() -> list[dict[str, object]] | None:
 
 
 @st.cache_data(ttl=300)
-def _load_player_board_ratings(player_id: str) -> list[ChartRating]:
+def _load_player_board_data(player_id: str) -> tuple[list[ChartRating], bool]:
     return load_player_ratings_from_supabase(player_id)
 
 
@@ -472,6 +472,7 @@ def _render_rating_boards(
     *,
     csv_file_name: str = "ex_rating_board.csv",
     include_standard: bool = True,
+    include_accuracy: bool = True,
     as_of: str | None = None,
 ) -> None:
     _, standard_total, ex_top, standard_top = get_rating_boards(ratings)
@@ -501,7 +502,7 @@ def _render_rating_boards(
                     _ex_board_table_row(
                         rank,
                         chart,
-                        include_accuracy=include_standard,
+                        include_accuracy=include_accuracy,
                     )
                     for rank, chart in enumerate(ex_top, 1)
                 ],
@@ -552,7 +553,7 @@ def _render_rating_boards(
     csv_data = (
         format_rating_board_csv(ratings)
         if include_standard
-        else format_ex_rating_board_csv(ratings)
+        else format_ex_rating_board_csv(ratings, include_accuracy=include_accuracy)
     )
     st.download_button(
         label="Download full board (CSV)",
@@ -1117,7 +1118,9 @@ else:
 
             if selected_player is not None:
                 with st.spinner("Loading player scores…"):
-                    ratings = _load_player_board_ratings(str(selected_player["player_id"]))
+                    ratings, has_accuracy = _load_player_board_data(
+                        str(selected_player["player_id"])
+                    )
 
                 if not ratings:
                     st.warning("No rated charts found for that player.")
@@ -1127,7 +1130,8 @@ else:
                     _render_rating_boards(
                         ratings,
                         csv_file_name=f"{safe_name}_ex_rating_board.csv",
-                        include_standard=False,
+                        include_standard=has_accuracy,
+                        include_accuracy=has_accuracy,
                         as_of=str(last_updated).strip() if last_updated else None,
                     )
 
