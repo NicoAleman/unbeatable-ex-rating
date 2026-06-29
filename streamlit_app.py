@@ -1,5 +1,6 @@
 """Unbeatable EX Rating — web UI (Streamlit)."""
 
+import contextlib
 import hashlib
 import importlib
 import json
@@ -100,6 +101,8 @@ LEADERBOARD_SIDE_BY_SIDE_MIN_PX = 1000
 SUBMIT_EX_RATING_PANEL_MAX_WIDTH_PX = 540
 # Each board width at the side-by-side breakpoint (~1rem page inset per side, 1rem gap).
 BOARD_MAX_WIDTH_PX = (SIDE_BY_SIDE_MIN_VIEWPORT_PX - 64 - 16) // 2
+# Upload, search, picker, and radio in the board viewer (~240px auto × 1.5).
+BOARD_VIEWER_CONTROL_WIDTH_PX = 360
 
 st.markdown(
     f"""
@@ -121,6 +124,7 @@ st.markdown(
         gap: 1rem;
         width: 100% !important;
     }}
+    .st-key-rating-boards-layout .st-key-ex-rating-board-column,
     .st-key-rating-boards-layout .st-key-ex-rating-board,
     .st-key-rating-boards-layout .st-key-std-rating-board {{
         flex: 1 1 0 !important;
@@ -130,6 +134,78 @@ st.markdown(
     }}
     .st-key-rating-boards-layout [data-testid="stVerticalBlockBorderWrapper"] {{
         width: 100%;
+    }}
+    .st-key-board-viewer-section {{
+        width: fit-content !important;
+        max-width: min(100%, {BOARD_MAX_WIDTH_PX}px) !important;
+        align-self: flex-start !important;
+    }}
+    .st-key-board-viewer-section [data-testid="stVerticalBlock"],
+    .st-key-board-viewer-section [data-testid="stVerticalBlockBorderWrapper"] {{
+        width: fit-content !important;
+        max-width: min(100%, {BOARD_MAX_WIDTH_PX}px) !important;
+        align-self: flex-start !important;
+    }}
+    .st-key-board-viewer-section [data-testid="stTextInput"],
+    .st-key-board-viewer-section [data-testid="stTextInput"] > div,
+    .st-key-board-viewer-section [data-testid="stTextInput"] input,
+    .st-key-board-viewer-section [data-testid="stSelectbox"],
+    .st-key-board-viewer-section [data-testid="stSelectbox"] > div,
+    .st-key-board-viewer-section [data-testid="stRadio"] {{
+        width: {BOARD_VIEWER_CONTROL_WIDTH_PX}px !important;
+        max-width: min(100%, {BOARD_MAX_WIDTH_PX}px) !important;
+        box-sizing: border-box !important;
+    }}
+    .st-key-board-viewer-section [data-testid="stFileUploader"] {{
+        width: max-content !important;
+        min-width: {BOARD_VIEWER_CONTROL_WIDTH_PX}px !important;
+        max-width: min(100%, {BOARD_MAX_WIDTH_PX}px) !important;
+        box-sizing: border-box !important;
+    }}
+    .st-key-board-viewer-section [data-testid="stFileUploader"] > section {{
+        width: auto !important;
+        max-width: 100% !important;
+        box-sizing: border-box !important;
+    }}
+    /* Streamlit stacks the Upload button and size hint below 23rem; keep them inline. */
+    .st-key-board-viewer-section [data-testid="stFileUploaderDropzone"] {{
+        flex-direction: row !important;
+        align-items: flex-start !important;
+        height: auto !important;
+    }}
+    .st-key-board-viewer-section [data-testid="stFileUploaderDropzoneInstructions"] {{
+        align-self: center !important;
+    }}
+    .st-key-board-viewer-section [data-testid="stAlert"],
+    .st-key-board-viewer-section [data-testid="stNotification"] {{
+        width: auto !important;
+        max-width: min(100%, {BOARD_MAX_WIDTH_PX}px) !important;
+        box-sizing: border-box !important;
+    }}
+    .st-key-board-view-results {{
+        width: fit-content !important;
+        max-width: 100% !important;
+        align-self: flex-start !important;
+    }}
+    .st-key-ex-rating-board-column {{
+        width: fit-content !important;
+        max-width: min(100%, {BOARD_MAX_WIDTH_PX}px) !important;
+        align-self: flex-start !important;
+    }}
+    .st-key-ex-rating-board-column [data-testid="stVerticalBlock"],
+    .st-key-ex-rating-board-column [data-testid="stVerticalBlockBorderWrapper"] {{
+        width: 100% !important;
+        max-width: 100% !important;
+    }}
+    .st-key-ex-rating-board-column [data-testid="stAlert"],
+    .st-key-ex-rating-board-column [data-testid="stNotification"] {{
+        width: 100% !important;
+        max-width: 100% !important;
+        box-sizing: border-box !important;
+    }}
+    .st-key-ex-rating-board-column .st-key-ex-rating-board {{
+        width: 100% !important;
+        max-width: 100% !important;
     }}
     .st-key-full-ex-leaderboard-outer {{
         width: fit-content !important;
@@ -271,6 +347,7 @@ st.markdown(
         .st-key-rating-boards-layout > [data-testid="stHorizontalBlock"] {{
             flex-direction: column !important;
         }}
+        .st-key-rating-boards-layout .st-key-ex-rating-board-column,
         .st-key-rating-boards-layout .st-key-ex-rating-board,
         .st-key-rating-boards-layout .st-key-std-rating-board {{
             flex: 0 0 auto !important;
@@ -300,7 +377,7 @@ def _render_potential_gains_expander(
     rating_attr: str,
     *,
     key: str,
-    expander_label: str = "Potential Gains from 100%'s",
+    expander_label: str = "Potential Rating Gains",
     potential_column_label: str = "Potential Rating",
     target_accuracy_label: str = "Target Accuracy",
 ) -> None:
@@ -474,6 +551,7 @@ def _render_rating_boards(
     include_standard: bool = True,
     include_accuracy: bool = True,
     as_of: str | None = None,
+    notice: str | None = None,
 ) -> None:
     _, standard_total, ex_top, standard_top = get_rating_boards(ratings)
     ex_with_completion = player_ex_rating_with_completion(ratings)
@@ -490,34 +568,41 @@ def _render_rating_boards(
         board_layout = st.container(key="rating-boards-layout")
 
     with board_layout:
-        with st.container(border=True, key="ex-rating-board"):
-            board_header(
-                "EX Rating",
-                format_rating_display(ex_with_completion),
-                "Includes +2.0 completion bonus",
-                as_of=format_last_updated(as_of) if as_of else None,
-            )
-            st.dataframe(
-                [
-                    _ex_board_table_row(
-                        rank,
-                        chart,
-                        include_accuracy=include_accuracy,
-                    )
-                    for rank, chart in enumerate(ex_top, 1)
-                ],
-                use_container_width=True,
-                hide_index=True,
-                height=TABLE_HEIGHT,
-            )
-            _render_potential_gains_expander(
-                ratings,
-                "ex_rating",
-                key="ex-potential-gains",
-                expander_label="Potential Gains from EX 100%'s",
-                potential_column_label="Potential EX Rating",
-                target_accuracy_label="Target EX Accuracy",
-            )
+        ex_board_wrapper = (
+            st.container(key="ex-rating-board-column")
+            if notice
+            else contextlib.nullcontext()
+        )
+        with ex_board_wrapper:
+            if notice:
+                st.info(notice)
+            with st.container(border=True, key="ex-rating-board"):
+                board_header(
+                    "EX Rating",
+                    format_rating_display(ex_with_completion),
+                    "Includes +2.0 completion bonus",
+                    as_of=format_last_updated(as_of) if as_of else None,
+                )
+                st.dataframe(
+                    [
+                        _ex_board_table_row(
+                            rank,
+                            chart,
+                            include_accuracy=include_accuracy,
+                        )
+                        for rank, chart in enumerate(ex_top, 1)
+                    ],
+                    use_container_width=True,
+                    hide_index=True,
+                    height=TABLE_HEIGHT,
+                )
+                _render_potential_gains_expander(
+                    ratings,
+                    "ex_rating",
+                    key="ex-potential-gains",
+                    potential_column_label="Potential EX Rating",
+                    target_accuracy_label="Target EX Accuracy",
+                )
 
         if include_standard:
             with st.container(border=True, key="std-rating-board"):
@@ -621,6 +706,18 @@ BOARD_PLAYER_SELECT_PLACEHOLDER = "— Select a player —"
 BOARD_PLAYER_SEARCH_LIMIT = 50
 
 
+def _auto_select_if_single_match(
+    *,
+    select_key: str,
+    placeholder: str,
+    matches: list[str],
+) -> None:
+    if len(matches) == 1:
+        st.session_state[select_key] = matches[0]
+    elif len(matches) == 0:
+        st.session_state[select_key] = placeholder
+
+
 def _render_submission_using_line(filename: str, from_above: bool) -> None:
     if from_above:
         st.caption(f"Using **{filename}** from your upload above.")
@@ -693,11 +790,13 @@ def _render_full_ex_submission_panel(
     uploaded: st.runtime.uploaded_file_manager.UploadedFile | None = None,
     ratings: list[ChartRating] | None = None,
 ) -> None:
-    submission_file = uploaded
-    submission_ratings = ratings
+    submission_file: st.runtime.uploaded_file_manager.UploadedFile | None = None
+    submission_ratings: list[ChartRating] | None = None
     submission_error: str | None = None
 
     if uploaded is not None:
+        submission_file = uploaded
+        submission_ratings = ratings
         _render_submission_using_line(uploaded.name, from_above=True)
     else:
         submission_file = st.file_uploader(
@@ -760,6 +859,12 @@ def _render_full_ex_submission_panel(
         ]
         if not candidate_entries:
             st.caption("No players match your search.")
+
+    _auto_select_if_single_match(
+        select_key="full-ex-submit-player-select",
+        placeholder=FULL_EX_PLAYER_SELECT_PLACEHOLDER,
+        matches=[_full_ex_player_option_label(entry) for entry in candidate_entries],
+    )
 
     selected_option = st.selectbox(
         "Player",
@@ -1033,107 +1138,134 @@ board_source_options = ["Upload file"]
 if supabase_configured():
     board_source_options.append("Search player")
 
-board_source = st.radio(
-    "View boards from",
-    options=board_source_options,
-    horizontal=True,
-    key="board-source-mode",
-)
-
 uploaded = None
 ratings: list[ChartRating] | None = None
+board_view_include_standard = True
+board_view_include_accuracy = True
+board_view_as_of: str | None = None
+board_view_csv_name = "ex_rating_board.csv"
+board_view_notice: str | None = None
 
-if board_source == "Upload file":
-    uploaded = st.file_uploader("arcade-highscores.json", type="json", key="arcade-highscores")
+with st.container(key="board-viewer-section", width="content"):
+    board_source = st.radio(
+        "View boards from",
+        options=board_source_options,
+        horizontal=True,
+        key="board-source-mode",
+    )
 
-    if uploaded is None:
-        st.info("Choose your arcade highscores file to get started.")
-    else:
-        try:
-            highscores = json.loads(uploaded.getvalue().decode("utf-8"))
-        except json.JSONDecodeError:
-            st.error("That file doesn't look like valid JSON. Make sure you're uploading arcade-highscores.json.")
+    if board_source == "Upload file":
+        uploaded = st.file_uploader("arcade-highscores.json", type="json", key="arcade-highscores")
+
+        if uploaded is None:
+            st.info("Choose your arcade highscores file to get started.")
         else:
-            if "highScores" not in highscores:
-                st.error("Missing `highScores` in the JSON. Is this the right file?")
+            try:
+                highscores = json.loads(uploaded.getvalue().decode("utf-8"))
+            except json.JSONDecodeError:
+                st.error("That file doesn't look like valid JSON. Make sure you're uploading arcade-highscores.json.")
             else:
-                with st.spinner("Calculating ratings…"):
-                    ratings = build_ratings(highscores, DEFAULT_MAX_SCORES_PATH)
-
-                if not ratings:
-                    st.warning(
-                        "No rated charts found. Check that your file has Classic mode scores for known charts."
-                    )
+                if "highScores" not in highscores:
+                    st.error("Missing `highScores` in the JSON. Is this the right file?")
                 else:
-                    _render_rating_boards(ratings)
-else:
-    if not supabase_configured():
-        st.info(
-            "Player search is not set up on this server yet. "
-            "Add `supabase.db_url` to `.streamlit/secrets.toml` "
-            "(see `.streamlit/secrets.toml.example`)."
-        )
-    else:
-        players_with_scores = _load_players_with_scores()
-        if players_with_scores is None:
-            st.error("Could not load players with stored scores.")
-        elif not players_with_scores:
-            st.info("No stored player scores are available yet.")
-        else:
-            player_search = st.text_input(
-                "Search players",
-                placeholder="Search by player name…",
-                key="board-player-search",
-            ).strip()
-            search_needle = player_search.casefold()
+                    with st.spinner("Calculating ratings…"):
+                        ratings = build_ratings(highscores, DEFAULT_MAX_SCORES_PATH)
 
-            if not search_needle:
-                st.caption(
-                    f"Search one of {len(players_with_scores)} players with stored scores."
+                    if not ratings:
+                        st.warning(
+                            "No rated charts found. Check that your file has Classic mode scores for known charts."
+                        )
+    else:
+        if not supabase_configured():
+            st.info(
+                "Player search is not set up on this server yet. "
+                "Add `supabase.db_url` to `.streamlit/secrets.toml` "
+                "(see `.streamlit/secrets.toml.example`)."
+            )
+        else:
+            players_with_scores = _load_players_with_scores()
+            if players_with_scores is None:
+                st.error("Could not load players with stored scores.")
+            elif not players_with_scores:
+                st.info("No stored player scores are available yet.")
+            else:
+                player_search = st.text_input(
+                    "Search players",
+                    placeholder="Search by player name…",
+                    key="board-player-search",
+                ).strip()
+                search_needle = player_search.casefold()
+
+                if not search_needle:
+                    st.caption(
+                        f"Search one of {len(players_with_scores)} players with stored scores."
+                    )
+                    player_options = [BOARD_PLAYER_SELECT_PLACEHOLDER]
+                    candidate_players: list[dict[str, object]] = []
+                else:
+                    candidate_players = [
+                        player
+                        for player in players_with_scores
+                        if search_needle in str(player["display_name"]).casefold()
+                    ][:BOARD_PLAYER_SEARCH_LIMIT]
+                    player_options = [BOARD_PLAYER_SELECT_PLACEHOLDER] + [
+                        _board_player_option_label(player) for player in candidate_players
+                    ]
+                    if not candidate_players:
+                        st.caption("No players match your search.")
+
+                _auto_select_if_single_match(
+                    select_key="board-player-select",
+                    placeholder=BOARD_PLAYER_SELECT_PLACEHOLDER,
+                    matches=[_board_player_option_label(player) for player in candidate_players],
                 )
-                player_options = [BOARD_PLAYER_SELECT_PLACEHOLDER]
-                candidate_players: list[dict[str, object]] = []
-            else:
-                candidate_players = [
-                    player
-                    for player in players_with_scores
-                    if search_needle in str(player["display_name"]).casefold()
-                ][:BOARD_PLAYER_SEARCH_LIMIT]
-                player_options = [BOARD_PLAYER_SELECT_PLACEHOLDER] + [
-                    _board_player_option_label(player) for player in candidate_players
-                ]
-                if not candidate_players:
-                    st.caption("No players match your search.")
 
-            selected_option = st.selectbox(
-                "Player",
-                options=player_options,
-                key="board-player-select",
-                disabled=not search_needle or not candidate_players,
-            )
-            selected_player = _find_board_player(
-                players_with_scores,
-                option_label=selected_option,
-            )
+                selected_option = st.selectbox(
+                    "Player",
+                    options=player_options,
+                    key="board-player-select",
+                    disabled=not search_needle or not candidate_players,
+                )
+                selected_player = _find_board_player(
+                    players_with_scores,
+                    option_label=selected_option,
+                )
 
-            if selected_player is not None:
-                with st.spinner("Loading player scores…"):
-                    ratings, has_accuracy = _load_player_board_data(
-                        str(selected_player["player_id"])
-                    )
+                if selected_player is not None:
+                    with st.spinner("Loading player scores…"):
+                        ratings, has_accuracy = _load_player_board_data(
+                            str(selected_player["player_id"])
+                        )
 
-                if not ratings:
-                    st.warning("No rated charts found for that player.")
-                else:
-                    safe_name = str(selected_player["display_name"]).strip().replace(" ", "_")
-                    last_updated = selected_player.get("last_updated")
-                    _render_rating_boards(
-                        ratings,
-                        csv_file_name=f"{safe_name}_ex_rating_board.csv",
-                        include_standard=has_accuracy,
-                        include_accuracy=has_accuracy,
-                        as_of=str(last_updated).strip() if last_updated else None,
-                    )
+                    if not ratings:
+                        st.warning("No rated charts found for that player.")
+                    else:
+                        if not has_accuracy:
+                            player_name = str(selected_player["display_name"])
+                            board_view_notice = (
+                                "Note: Only EX Accuracies and Ratings are available. "
+                                f"**{player_name}** may submit their arcade-highscores.json below "
+                                "to share their Accuracies and Standard Rating Board."
+                            )
+                        board_view_include_standard = has_accuracy
+                        board_view_include_accuracy = has_accuracy
+                        safe_name = str(selected_player["display_name"]).strip().replace(" ", "_")
+                        board_view_csv_name = f"{safe_name}_ex_rating_board.csv"
+                        last_updated = selected_player.get("last_updated")
+                        board_view_as_of = (
+                            str(last_updated).strip() if last_updated else None
+                        )
 
-render_full_ex_rating_leaderboard(uploaded, ratings)
+if ratings:
+    with st.container(key="board-view-results", width="content"):
+        _render_rating_boards(
+            ratings,
+            csv_file_name=board_view_csv_name,
+            include_standard=board_view_include_standard,
+            include_accuracy=board_view_include_accuracy,
+            as_of=board_view_as_of,
+            notice=board_view_notice,
+        )
+
+render_full_ex_rating_leaderboard(uploaded, ratings if uploaded is not None else None)
 render_ex_rating_info()
