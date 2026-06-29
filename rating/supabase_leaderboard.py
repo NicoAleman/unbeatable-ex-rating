@@ -1,16 +1,21 @@
-import sqlite3
 import sys
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 
 import psycopg2
 import psycopg2.extras
 
-from rating.constants import EX_RATING_LEADERBOARD_DB_PATH
-from rating.ex_leaderboard_db import ExLeaderboardEntry, _connect as connect_sqlite
-from rating.supabase_config import get_supabase_db_url
+from rating.constants import (
+    EX_RATING_LEADERBOARD_DB_PATH,
+    SCORE_SOURCE_SEED,
+    SCORE_SOURCE_SUBMISSION,
+    TOP_SCORES_SYNC_PLAYER_COUNT,
+)
+from rating.ex_leaderboard_db import _connect as connect_sqlite
+from rating.baseline_leaderboard import UpdatedRating
+from rating.supabase_config import get_supabase_db_url, supabase_configured
 
-BATCH_SIZE = 5000
+BATCH_SIZE = 2000
 
 
 def _connect_postgres(db_url: str | None = None):
@@ -21,58 +26,6 @@ def _connect_postgres(db_url: str | None = None):
             "or SUPABASE_DB_URL in the environment."
         )
     return psycopg2.connect(url)
-
-
-def supabase_has_data(db_url: str | None = None) -> bool:
-    if not get_supabase_db_url() and not db_url:
-        return False
-    conn = _connect_postgres(db_url)
-    try:
-        with conn.cursor() as cur:
-            cur.execute("SELECT EXISTS (SELECT 1 FROM players LIMIT 1)")
-            return bool(cur.fetchone()[0])
-    finally:
-        conn.close()
-
-
-def load_ex_leaderboard_from_supabase(
-    *,
-    search: str = "",
-    limit: int | None = None,
-    db_url: str | None = None,
-) -> list[ExLeaderboardEntry]:
-    conn = _connect_postgres(db_url)
-    try:
-        query = """
-            SELECT rank, player_id, display_name, ex_rating, last_updated
-            FROM players
-        """
-        params: list[object] = []
-        trimmed_search = search.strip()
-        if trimmed_search:
-            query += " WHERE display_name ILIKE %s"
-            params.append(f"%{trimmed_search}%")
-        query += " ORDER BY rank ASC, display_name ASC"
-        if limit is not None:
-            query += " LIMIT %s"
-            params.append(limit)
-
-        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
-            cur.execute(query, params)
-            rows = cur.fetchall()
-    finally:
-        conn.close()
-
-    return [
-        ExLeaderboardEntry(
-            rank=int(row["rank"]),
-            player_id=str(row["player_id"]),
-            player=str(row["display_name"]),
-            ex_rating=float(row["ex_rating"]),
-            last_updated=_format_timestamp(row["last_updated"]),
-        )
-        for row in rows
-    ]
 
 
 def _format_timestamp(value: object) -> str:
@@ -88,122 +41,127 @@ def _batched(rows: list[tuple], batch_size: int = BATCH_SIZE):
         yield rows[index : index + batch_size]
 
 
-def sync_sqlite_to_supabase(
+def load_updated_ratings_from_supabase(
+    db_url: str | None = None,
+) -> dict[str, UpdatedRating]:
+    if not supabase_configured() and not db_url:
+        return {}
+
+    conn = _connect_postgres(db_url)
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            cur.execute(
+                """
+                SELECT player_id, ex_rating, last_updated
+                FROM updated_ratings
+                ORDER BY player_id
+                """
+            )
+            rows = cur.fetchall()
+    except psycopg2.errors.UndefinedTable:
+        return {}
+    finally:
+        conn.close()
+
+    return {
+        str(row["player_id"]): UpdatedRating(
+            ex_rating=float(row["ex_rating"]),
+            last_updated=_format_timestamp(row["last_updated"]),
+        )
+        for row in rows
+    }
+
+
+def load_submission_scores_from_supabase(
+    db_url: str | None = None,
+) -> list[dict[str, object]]:
+    """Scores added via site features — exclude the initial seed import."""
+    if not supabase_configured() and not db_url:
+        return []
+
+    conn = _connect_postgres(db_url)
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            cur.execute(
+                """
+                SELECT player_id, song, difficulty, score, source
+                FROM scores
+                WHERE source = %s
+                ORDER BY player_id, song, difficulty
+                """,
+                (SCORE_SOURCE_SUBMISSION,),
+            )
+            return [dict(row) for row in cur.fetchall()]
+    except psycopg2.errors.UndefinedTable:
+        return []
+    finally:
+        conn.close()
+
+
+def sync_top_scores_to_supabase(
     sqlite_path: Path = EX_RATING_LEADERBOARD_DB_PATH,
     db_url: str | None = None,
+    *,
+    top_n: int = TOP_SCORES_SYNC_PLAYER_COUNT,
+    source: str = SCORE_SOURCE_SEED,
 ) -> dict[str, int]:
-    """Replace Supabase leaderboard tables with data from the local SQLite build."""
+    """Upload chart scores for the top N rated players (seed import)."""
     if not sqlite_path.exists():
         raise FileNotFoundError(f"SQLite database not found: {sqlite_path}")
 
-    postgres = _connect_postgres(db_url)
     sqlite = connect_sqlite(sqlite_path)
     try:
-        player_rows = sqlite.execute(
+        top_players = sqlite.execute(
             """
-            SELECT player_id, display_name, player_name, ex_rating, rank, last_updated
+            SELECT player_id
             FROM players
-            ORDER BY player_id
-            """
+            ORDER BY ex_rating DESC, display_name COLLATE NOCASE ASC
+            LIMIT ?
+            """,
+            (top_n,),
         ).fetchall()
+        top_player_ids = [row["player_id"] for row in top_players]
+        if not top_player_ids:
+            return {"players": 0, "scores": 0}
+
+        placeholders = ",".join("?" for _ in top_player_ids)
         score_rows = sqlite.execute(
-            """
+            f"""
             SELECT player_id, song, difficulty, score
             FROM scores
+            WHERE player_id IN ({placeholders})
             ORDER BY player_id, song, difficulty
-            """
-        ).fetchall()
-        override_rows = sqlite.execute(
-            """
-            SELECT player_id, ex_rating, reason, updated_at
-            FROM rating_overrides
-            ORDER BY player_id
-            """
-        ).fetchall()
-        metadata_rows = sqlite.execute(
-            "SELECT key, value FROM metadata ORDER BY key"
+            """,
+            top_player_ids,
         ).fetchall()
     finally:
         sqlite.close()
 
-    counts = {
-        "players": len(player_rows),
-        "scores": len(score_rows),
-        "rating_overrides": len(override_rows),
-        "metadata": len(metadata_rows),
-    }
+    score_payload = [
+        (row["player_id"], row["song"], row["difficulty"], int(row["score"]), source)
+        for row in score_rows
+    ]
 
+    postgres = _connect_postgres(db_url)
     with postgres:
         with postgres.cursor() as cur:
-            cur.execute("TRUNCATE rating_overrides, scores, players, metadata CASCADE")
+            cur.execute("DELETE FROM scores WHERE source = %s", (source,))
+            print(f"Cleared existing {source} scores from Supabase", file=sys.stderr)
 
-            cur.executemany(
-                """
-                INSERT INTO players (
-                    player_id, display_name, player_name, ex_rating, rank, last_updated
-                ) VALUES (%s, %s, %s, %s, %s, %s)
-                """,
-                [
-                    (
-                        row["player_id"],
-                        row["display_name"],
-                        row["player_name"],
-                        float(row["ex_rating"]),
-                        int(row["rank"]),
-                        row["last_updated"],
-                    )
-                    for row in player_rows
-                ],
-            )
-            print(f"Inserted {counts['players']} players", file=sys.stderr)
-
-            score_payload = [
-                (row["player_id"], row["song"], row["difficulty"], int(row["score"]))
-                for row in score_rows
-            ]
             for batch_index, batch in enumerate(_batched(score_payload), 1):
                 psycopg2.extras.execute_batch(
                     cur,
                     """
-                    INSERT INTO scores (player_id, song, difficulty, score)
-                    VALUES (%s, %s, %s, %s)
+                    INSERT INTO scores (player_id, song, difficulty, score, source)
+                    VALUES (%s, %s, %s, %s, %s)
                     """,
                     batch,
                     page_size=BATCH_SIZE,
                 )
-                if batch_index % 20 == 0:
-                    print(f"Inserted {batch_index * BATCH_SIZE} scores…", file=sys.stderr)
-            print(f"Inserted {counts['scores']} scores", file=sys.stderr)
-
-            if override_rows:
-                cur.executemany(
-                    """
-                    INSERT INTO rating_overrides (player_id, ex_rating, reason, updated_at)
-                    VALUES (%s, %s, %s, %s)
-                    """,
-                    [
-                        (
-                            row["player_id"],
-                            float(row["ex_rating"]),
-                            row["reason"],
-                            row["updated_at"],
-                        )
-                        for row in override_rows
-                    ],
+                print(
+                    f"Inserted batch {batch_index} ({min(batch_index * BATCH_SIZE, len(score_payload))}/{len(score_payload)} scores)…",
+                    file=sys.stderr,
                 )
+        postgres.commit()
 
-            if metadata_rows:
-                cur.executemany(
-                    "INSERT INTO metadata (key, value) VALUES (%s, %s)",
-                    [(row["key"], row["value"]) for row in metadata_rows],
-                )
-
-            cur.execute(
-                """
-                INSERT INTO metadata (key, value) VALUES (%s, %s)
-                ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
-                """,
-                ("last_supabase_sync", datetime.now(timezone.utc).isoformat()),
-            )
-
-    return counts
+    return {"players": len(top_player_ids), "scores": len(score_payload)}

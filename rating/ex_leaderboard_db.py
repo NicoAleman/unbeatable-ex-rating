@@ -9,7 +9,6 @@ from rating.board import competition_ranks_for_values, player_ex_rating_with_com
 from rating.constants import (
     DEFAULT_MAX_SCORES_PATH,
     EX_RATING_LEADERBOARD_DB_PATH,
-    FULL_EX_RATING_LEADERBOARD_PATH,
     LEADERBOARDS_JUNE27_DIR,
     RATING_OVERRIDES_PATH,
 )
@@ -351,107 +350,11 @@ def build_ex_leaderboard_database(
     finally:
         conn.close()
 
+    from rating.baseline_leaderboard import export_baseline_leaderboard_from_sqlite
+
+    export_baseline_leaderboard_from_sqlite(db_path)
+
     return int(player_count)
-
-
-def _load_ex_leaderboard_from_csv(
-    csv_path: Path = FULL_EX_RATING_LEADERBOARD_PATH,
-    *,
-    search: str = "",
-    limit: int | None = None,
-) -> list[ExLeaderboardEntry]:
-    from rating.imported_players import load_full_ex_leaderboard_csv
-
-    rankings = load_full_ex_leaderboard_csv(csv_path)
-    trimmed_search = search.strip()
-    if trimmed_search:
-        needle = trimmed_search.casefold()
-        rankings = [entry for entry in rankings if needle in entry.player.casefold()]
-    if limit is not None:
-        rankings = rankings[:limit]
-
-    return [
-        ExLeaderboardEntry(
-            rank=int(entry.rank),
-            player_id=str(entry.player_id),
-            player=str(entry.player),
-            ex_rating=float(entry.ex_rating),
-            last_updated="",
-        )
-        for entry in rankings
-    ]
-
-
-def leaderboard_available(
-    db_path: Path = EX_RATING_LEADERBOARD_DB_PATH,
-    csv_path: Path = FULL_EX_RATING_LEADERBOARD_PATH,
-) -> bool:
-    from rating.leaderboard_config import use_sql_leaderboard
-
-    if not use_sql_leaderboard():
-        return csv_path.exists()
-
-    from rating.supabase_config import supabase_configured
-    from rating.supabase_leaderboard import supabase_has_data
-
-    if supabase_configured():
-        return supabase_has_data()
-    return db_path.exists()
-
-
-def load_ex_leaderboard(
-    db_path: Path = EX_RATING_LEADERBOARD_DB_PATH,
-    csv_path: Path = FULL_EX_RATING_LEADERBOARD_PATH,
-    *,
-    search: str = "",
-    limit: int | None = None,
-) -> list[ExLeaderboardEntry]:
-    from rating.leaderboard_config import use_sql_leaderboard
-
-    if not use_sql_leaderboard():
-        if not csv_path.exists():
-            return []
-        return _load_ex_leaderboard_from_csv(csv_path, search=search, limit=limit)
-
-    from rating.supabase_config import supabase_configured
-    from rating.supabase_leaderboard import load_ex_leaderboard_from_supabase
-
-    if supabase_configured():
-        return load_ex_leaderboard_from_supabase(search=search, limit=limit)
-
-    if not db_path.exists():
-        return []
-
-    conn = _connect(db_path)
-    try:
-        query = """
-            SELECT rank, player_id, display_name, ex_rating, last_updated
-            FROM players
-        """
-        params: list[object] = []
-        trimmed_search = search.strip()
-        if trimmed_search:
-            query += " WHERE LOWER(display_name) LIKE LOWER(?)"
-            params.append(f"%{trimmed_search}%")
-        query += " ORDER BY rank ASC, display_name COLLATE NOCASE ASC"
-        if limit is not None:
-            query += " LIMIT ?"
-            params.append(limit)
-
-        rows = conn.execute(query, params).fetchall()
-    finally:
-        conn.close()
-
-    return [
-        ExLeaderboardEntry(
-            rank=int(row["rank"]),
-            player_id=str(row["player_id"]),
-            player=str(row["display_name"]),
-            ex_rating=float(row["ex_rating"]),
-            last_updated=str(row["last_updated"]),
-        )
-        for row in rows
-    ]
 
 
 def get_player_count(db_path: Path = EX_RATING_LEADERBOARD_DB_PATH) -> int:

@@ -1,47 +1,33 @@
--- Prefer Supabase GitHub integration: commit supabase/migrations/ and enable
--- Deploy to production in Project Settings → Integrations.
--- This file is a manual fallback for the SQL Editor (same as the initial migration).
+-- Hybrid leaderboard schema. See supabase/migrations/20260629180000_hybrid_leaderboard.sql
 
-CREATE TABLE metadata (
-    key TEXT PRIMARY KEY,
-    value TEXT NOT NULL
-);
+DROP TABLE IF EXISTS scores CASCADE;
+DROP TABLE IF EXISTS rating_overrides CASCADE;
+DROP TABLE IF EXISTS players CASCADE;
+DROP TABLE IF EXISTS metadata CASCADE;
+DROP TABLE IF EXISTS updated_ratings CASCADE;
 
-CREATE TABLE players (
+CREATE TABLE updated_ratings (
     player_id TEXT PRIMARY KEY,
-    display_name TEXT NOT NULL,
-    player_name TEXT,
     ex_rating DOUBLE PRECISION NOT NULL,
-    rank INTEGER NOT NULL,
     last_updated TIMESTAMPTZ NOT NULL
 );
 
 CREATE TABLE scores (
-    player_id TEXT NOT NULL REFERENCES players (player_id) ON DELETE CASCADE,
+    player_id TEXT NOT NULL,
     song TEXT NOT NULL,
     difficulty TEXT NOT NULL,
     score INTEGER NOT NULL,
+    source TEXT NOT NULL CHECK (source IN ('seed', 'submission')),
     PRIMARY KEY (player_id, song, difficulty)
 );
 
-CREATE TABLE rating_overrides (
-    player_id TEXT PRIMARY KEY REFERENCES players (player_id) ON DELETE CASCADE,
-    ex_rating DOUBLE PRECISION NOT NULL,
-    reason TEXT NOT NULL DEFAULT '',
-    updated_at TIMESTAMPTZ NOT NULL
-);
-
-CREATE INDEX idx_players_rank ON players (rank);
-CREATE INDEX idx_players_ex_rating ON players (ex_rating DESC);
-CREATE INDEX idx_players_display_name_lower ON players (LOWER(display_name));
 CREATE INDEX idx_scores_player ON scores (player_id);
+CREATE INDEX idx_scores_source ON scores (source);
 
-ALTER TABLE players ENABLE ROW LEVEL SECURITY;
+ALTER TABLE updated_ratings ENABLE ROW LEVEL SECURITY;
 ALTER TABLE scores ENABLE ROW LEVEL SECURITY;
-ALTER TABLE metadata ENABLE ROW LEVEL SECURITY;
-ALTER TABLE rating_overrides ENABLE ROW LEVEL SECURITY;
 
-CREATE POLICY "Public read players"
-    ON players
+CREATE POLICY "Public read updated_ratings"
+    ON updated_ratings
     FOR SELECT
     USING (true);
