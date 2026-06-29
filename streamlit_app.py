@@ -182,11 +182,6 @@ st.markdown(
         max-width: min(100%, {BOARD_MAX_WIDTH_PX}px) !important;
         box-sizing: border-box !important;
     }}
-    .st-key-board-view-results {{
-        width: fit-content !important;
-        max-width: 100% !important;
-        align-self: flex-start !important;
-    }}
     .st-key-ex-rating-board-column {{
         width: fit-content !important;
         max-width: min(100%, {BOARD_MAX_WIDTH_PX}px) !important;
@@ -1257,15 +1252,14 @@ with st.container(key="board-viewer-section", width="content"):
                         )
 
 if ratings:
-    with st.container(key="board-view-results", width="content"):
-        _render_rating_boards(
-            ratings,
-            csv_file_name=board_view_csv_name,
-            include_standard=board_view_include_standard,
-            include_accuracy=board_view_include_accuracy,
-            as_of=board_view_as_of,
-            notice=board_view_notice,
-        )
+    _render_rating_boards(
+        ratings,
+        csv_file_name=board_view_csv_name,
+        include_standard=board_view_include_standard,
+        include_accuracy=board_view_include_accuracy,
+        as_of=board_view_as_of,
+        notice=board_view_notice,
+    )
 
 render_full_ex_rating_leaderboard(uploaded, ratings if uploaded is not None else None)
 render_ex_rating_info()
