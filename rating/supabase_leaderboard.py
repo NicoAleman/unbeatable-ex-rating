@@ -165,3 +165,56 @@ def sync_top_scores_to_supabase(
         postgres.commit()
 
     return {"players": len(top_player_ids), "scores": len(score_payload)}
+
+
+def submit_player_update_to_supabase(
+    *,
+    player_id: str,
+    ex_rating: float,
+    last_updated: str,
+    scores: list[tuple[str, str, int]],
+    source: str = SCORE_SOURCE_SUBMISSION,
+    db_url: str | None = None,
+) -> dict[str, int]:
+    """Upsert a live rating override and replace submission scores for one player."""
+    if not scores:
+        raise ValueError("scores must not be empty")
+
+    postgres = _connect_postgres(db_url)
+    score_payload = [
+        (player_id, song, difficulty, int(score), source)
+        for song, difficulty, score in scores
+    ]
+
+    with postgres:
+        with postgres.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO updated_ratings (player_id, ex_rating, last_updated)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (player_id) DO UPDATE SET
+                    ex_rating = EXCLUDED.ex_rating,
+                    last_updated = EXCLUDED.last_updated
+                """,
+                (player_id, float(ex_rating), last_updated),
+            )
+            cur.execute(
+                "DELETE FROM scores WHERE player_id = %s AND source = %s",
+                (player_id, source),
+            )
+            for batch in _batched(score_payload):
+                psycopg2.extras.execute_batch(
+                    cur,
+                    """
+                    INSERT INTO scores (player_id, song, difficulty, score, source)
+                    VALUES (%s, %s, %s, %s, %s)
+                    ON CONFLICT (player_id, song, difficulty) DO UPDATE SET
+                        score = EXCLUDED.score,
+                        source = EXCLUDED.source
+                    """,
+                    batch,
+                    page_size=BATCH_SIZE,
+                )
+        postgres.commit()
+
+    return {"scores": len(score_payload)}

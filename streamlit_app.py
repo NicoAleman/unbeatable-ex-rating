@@ -4,7 +4,7 @@ import hashlib
 import importlib
 import json
 
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 
 import streamlit as st
 
@@ -15,22 +15,27 @@ from rating.models import ChartRating
 importlib.reload(constants_module)
 
 from rating import board as board_module
+from rating import chart_levels as chart_levels_module
 from rating import data as data_module
 from rating import formatting as formatting_module
 from rating import shared_rankings as shared_rankings_module
 from rating import submissions as submissions_module
 from rating import imported_players as imported_players_module
 from rating import ex_leaderboard_db as ex_leaderboard_db_module
+from rating import full_ex_submissions as full_ex_submissions_module
 from rating import public_leaderboard as public_leaderboard_module
+from rating.supabase_config import supabase_configured
 
 importlib.reload(data_module)
 importlib.reload(formatting_module)
 importlib.reload(board_module)
+importlib.reload(chart_levels_module)
 importlib.reload(submissions_module)
 importlib.reload(shared_rankings_module)
 importlib.reload(imported_players_module)
 importlib.reload(ex_leaderboard_db_module)
 importlib.reload(public_leaderboard_module)
+importlib.reload(full_ex_submissions_module)
 
 COMPLETION_BONUS = constants_module.COMPLETION_BONUS
 DEFAULT_MAX_SCORES_PATH = constants_module.DEFAULT_MAX_SCORES_PATH
@@ -54,7 +59,11 @@ pending_submission_url = submissions_module.pending_submission_url
 submit_ranking = submissions_module.submit_ranking
 submit_pending_ranking = submissions_module.submit_pending_ranking
 load_ex_leaderboard = public_leaderboard_module.load_ex_leaderboard
+load_ex_leaderboard_with_warning = public_leaderboard_module.load_ex_leaderboard_with_warning
 leaderboard_available = public_leaderboard_module.leaderboard_available
+SUPABASE_LOAD_ERROR_MESSAGE = public_leaderboard_module.SUPABASE_LOAD_ERROR_MESSAGE
+validate_full_ex_rating_submission = full_ex_submissions_module.validate_full_ex_rating_submission
+submit_full_ex_rating_update = full_ex_submissions_module.submit_full_ex_rating_update
 
 _DATE_FORMATS = ("%Y-%m-%d", "%m/%d/%Y", "%m/%d/%y", "%B %d, %Y", "%b %d, %Y")
 
@@ -73,7 +82,12 @@ def format_last_updated(value: object) -> str:
     if not text:
         return "—"
     try:
-        return datetime.fromisoformat(text).strftime("%B %d, %Y")
+        dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        if dt.tzinfo is not None:
+            dt = dt.astimezone()
+        elif dt.hour or dt.minute or dt.second or dt.microsecond:
+            dt = dt.replace(tzinfo=timezone.utc).astimezone()
+        return dt.strftime("%B %d, %Y")
     except ValueError:
         pass
     for fmt in _DATE_FORMATS:
@@ -149,6 +163,80 @@ st.markdown(
     .st-key-full-ex-leaderboard-outer {{
         width: fit-content !important;
         max-width: 100% !important;
+    }}
+    .st-key-full-ex-leaderboard-layout [data-testid="stHorizontalBlock"] {{
+        display: flex !important;
+        flex-direction: row !important;
+        flex-wrap: nowrap !important;
+        align-items: flex-start !important;
+        gap: 1rem;
+        width: fit-content !important;
+        max-width: 100% !important;
+    }}
+    .st-key-full-ex-leaderboard-layout .st-key-full-ex-leaderboard-content {{
+        flex: 0 0 auto !important;
+        width: auto !important;
+        max-width: 100% !important;
+    }}
+    .st-key-full-ex-leaderboard-layout .st-key-full-ex-submit-panel {{
+        flex: 0 0 auto !important;
+        width: {SUBMIT_EX_RATING_PANEL_MAX_WIDTH_PX}px !important;
+        max-width: 100% !important;
+    }}
+    .st-key-full-ex-submit-panel [data-testid="stVerticalBlockBorderWrapper"],
+    .st-key-full-ex-submit-panel [data-testid="stTextInput"],
+    .st-key-full-ex-submit-panel [data-testid="stFileUploader"],
+    .st-key-full-ex-submit-panel [data-testid="stForm"],
+    .st-key-full-ex-submit-panel [data-testid="stSelectbox"] {{
+        max-width: 100% !important;
+    }}
+    .st-key-full-ex-submit-panel [data-testid="stVerticalBlockBorderWrapper"] {{
+        width: 100% !important;
+        box-sizing: border-box !important;
+    }}
+    .st-key-full-ex-submit-panel [data-testid="stMarkdownContainer"]:has(.submission-ex-rating),
+    .st-key-full-ex-submit-panel [data-testid="stMarkdownContainer"]:has(.submission-selected-player),
+    .st-key-full-ex-submit-panel [data-testid="stMarkdownContainer"]:has(.submission-rating-divider) {{
+        margin: 0 !important;
+        padding: 0.35rem 0 !important;
+    }}
+    .st-key-full-ex-submit-panel .submission-ex-rating,
+    .st-key-full-ex-submit-panel .submission-selected-player {{
+        margin: 0;
+        padding: 0;
+        color: rgba(250, 250, 250, 0.6);
+    }}
+    .st-key-full-ex-submit-panel .submission-ex-rating-value,
+    .st-key-full-ex-submit-panel .submission-selected-player-value {{
+        font-size: 1.125rem;
+        line-height: 1.4;
+    }}
+    .st-key-full-ex-submit-panel .submission-ex-rating-note,
+    .st-key-full-ex-submit-panel .submission-selected-player-detail {{
+        font-size: 0.875rem;
+        line-height: 1.4;
+        margin-top: 0.15rem;
+    }}
+    .st-key-full-ex-submit-panel .submission-rating-divider {{
+        border-top: 1px solid rgba(250, 250, 250, 0.2);
+        margin: 0;
+        height: 0;
+    }}
+    .st-key-full-ex-submit-panel [data-testid="stMarkdownContainer"]:has(.submission-accepted) {{
+        margin: 0 !important;
+        padding: 0 !important;
+    }}
+    .st-key-full-ex-submit-panel .submission-accepted {{
+        background: rgba(33, 195, 84, 0.15);
+        border: 1px solid rgba(33, 195, 84, 0.45);
+        border-radius: 0.5rem;
+        color: rgb(33, 195, 84);
+        font-size: 1rem;
+        font-weight: 600;
+        line-height: 1.4;
+        margin: 0.75rem 0 0;
+        padding: 0.85rem 1rem;
+        text-align: center;
     }}
     .st-key-full-ex-leaderboard-body {{
         display: flex !important;
@@ -253,6 +341,9 @@ st.markdown(
         .st-key-shared-rankings-outer .st-key-shared-ex-leaderboard {{
             margin-right: 1.5rem !important;
         }}
+        .st-key-full-ex-leaderboard-layout .st-key-full-ex-leaderboard-content {{
+            margin-right: 1.5rem !important;
+        }}
     }}
     @media (max-width: {SHARED_RANKINGS_SIDE_BY_SIDE_MIN_PX - 1}px) {{
         .st-key-shared-rankings-outer [data-testid="stHorizontalBlock"] {{
@@ -263,6 +354,16 @@ st.markdown(
             width: 100% !important;
         }}
         .st-key-shared-rankings-outer .st-key-shared-ex-leaderboard {{
+            margin-right: 0 !important;
+        }}
+        .st-key-full-ex-leaderboard-layout [data-testid="stHorizontalBlock"] {{
+            flex-direction: column !important;
+            align-items: flex-start !important;
+        }}
+        .st-key-full-ex-leaderboard-layout .st-key-full-ex-submit-panel {{
+            width: 100% !important;
+        }}
+        .st-key-full-ex-leaderboard-layout .st-key-full-ex-leaderboard-content {{
             margin-right: 0 !important;
         }}
     }}
@@ -415,6 +516,39 @@ def _record_submission(
     }
 
 
+def _already_submitted_full_ex(
+    player_id: str,
+    uploaded: st.runtime.uploaded_file_manager.UploadedFile | None,
+) -> bool:
+    last = st.session_state.get("last_full_ex_submission")
+    if not last or uploaded is None or not player_id:
+        return False
+    return (
+        last["player_id"] == player_id
+        and last["file_hash"] == _uploaded_file_hash(uploaded)
+    )
+
+
+def _accepted_full_ex_submission_message() -> str | None:
+    last = st.session_state.get("last_full_ex_submission")
+    if not last:
+        return None
+    message = last.get("message")
+    return str(message).strip() if message else None
+
+
+def _record_full_ex_submission(
+    player_id: str,
+    uploaded: st.runtime.uploaded_file_manager.UploadedFile,
+    message: str,
+) -> None:
+    st.session_state.last_full_ex_submission = {
+        "player_id": player_id,
+        "file_hash": _uploaded_file_hash(uploaded),
+        "message": message,
+    }
+
+
 def _get_leaderboard_rankings() -> list | None:
     if "leaderboard_rankings" not in st.session_state:
         st.session_state.leaderboard_rankings = load_shared_ex_rankings()
@@ -447,6 +581,8 @@ def _load_ratings_from_upload(
 
 
 MANUAL_PLAYER_ENTRY = "- New Player / Manual Entry -"
+FULL_EX_PLAYER_SELECT_PLACEHOLDER = "— Select a player —"
+FULL_EX_SUBMIT_PLAYER_SEARCH_LIMIT = 50
 
 
 def _render_submission_using_line(filename: str, from_above: bool) -> None:
@@ -477,6 +613,209 @@ def _render_submission_accepted(message: str) -> None:
     )
 
 
+def _full_ex_player_option_label(entry: object) -> str:
+    return f"{entry.player} (#{entry.rank})"
+
+
+def _find_full_ex_leaderboard_entry(
+    full_rankings: list,
+    *,
+    player_id: str = "",
+    option_label: str = "",
+) -> object | None:
+    if player_id:
+        for entry in full_rankings:
+            if entry.player_id == player_id:
+                return entry
+    if option_label and option_label != FULL_EX_PLAYER_SELECT_PLACEHOLDER:
+        for entry in full_rankings:
+            if _full_ex_player_option_label(entry) == option_label:
+                return entry
+    return None
+
+
+def _render_full_ex_selected_player(entry: object) -> None:
+    st.markdown(
+        f"""
+        <div class="submission-selected-player">
+            <div class="submission-selected-player-value">
+                Selected player: <strong>{entry.player}</strong>
+            </div>
+            <div class="submission-selected-player-detail">
+                Rank <strong>#{entry.rank}</strong>
+                · EX Rating <strong>{format_rating_display(entry.ex_rating)}</strong>
+                · Last updated <strong>{format_last_updated(entry.last_updated)}</strong>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _render_full_ex_submission_panel(full_rankings: list) -> None:
+    submission_file = st.file_uploader(
+        "arcade-highscores.json",
+        type="json",
+        key="full-ex-submission-highscores",
+    )
+    submission_ratings: list[ChartRating] | None = None
+    submission_error: str | None = None
+
+    if submission_file is not None:
+        submission_ratings, submission_error = _load_ratings_from_upload(submission_file)
+        if submission_error:
+            st.error(submission_error)
+    else:
+        st.info("Upload your arcade-highscores.json to submit.")
+
+    submitted_rating: float | None = None
+    if submission_ratings:
+        submitted_rating = player_ex_rating_with_completion(submission_ratings)
+        _render_submission_ex_rating(submitted_rating)
+        st.markdown('<div class="submission-rating-divider"></div>', unsafe_allow_html=True)
+
+    st.caption(
+        "Select an existing player from the full leaderboard, then upload your "
+        "arcade-highscores.json to submit an updated rating."
+    )
+    st.caption(
+        "_Note: Existing ratings can only be updated with a higher rating. "
+        "Contact Nico with any issues or requests._"
+    )
+
+    if not supabase_configured():
+        st.info(
+            "Full leaderboard submissions are not set up on this server yet. "
+            "Add `supabase.db_url` to `.streamlit/secrets.toml` "
+            "(see `.streamlit/secrets.toml.example`)."
+        )
+
+    player_search = st.text_input(
+        "Search players",
+        placeholder="Search by player name…",
+        key="full-ex-submit-player-search",
+    ).strip()
+    search_needle = player_search.casefold()
+
+    if not search_needle:
+        st.caption("Search for a player to select them.")
+        player_options = [FULL_EX_PLAYER_SELECT_PLACEHOLDER]
+        candidate_entries: list = []
+    else:
+        candidate_entries = [
+            entry
+            for entry in full_rankings
+            if search_needle in entry.player.casefold()
+        ][:FULL_EX_SUBMIT_PLAYER_SEARCH_LIMIT]
+        player_options = [FULL_EX_PLAYER_SELECT_PLACEHOLDER] + [
+            _full_ex_player_option_label(entry) for entry in candidate_entries
+        ]
+        if not candidate_entries:
+            st.caption("No players match your search.")
+
+    selected_option = st.selectbox(
+        "Player",
+        options=player_options,
+        key="full-ex-submit-player-select",
+        disabled=not search_needle or not candidate_entries,
+    )
+
+    selected_entry = _find_full_ex_leaderboard_entry(
+        full_rankings,
+        option_label=selected_option,
+    )
+    if selected_entry is not None:
+        _render_full_ex_selected_player(selected_entry)
+        st.markdown('<div class="submission-rating-divider"></div>', unsafe_allow_html=True)
+
+    submission_accepted = (
+        selected_entry is not None
+        and _already_submitted_full_ex(selected_entry.player_id, submission_file)
+    )
+    accepted_message = (
+        _accepted_full_ex_submission_message() if submission_accepted else None
+    )
+
+    submission_blocked_reason: str | None = None
+    if (
+        selected_entry is not None
+        and submitted_rating is not None
+        and not submission_accepted
+    ):
+        _, submission_blocked_reason = validate_full_ex_rating_submission(
+            selected_entry.ex_rating,
+            submitted_rating,
+        )
+
+    submission_in_progress = st.session_state.get("full_ex_submission_in_progress", False)
+
+    if submission_accepted:
+        _render_submission_accepted(accepted_message or "Rating update saved!")
+    else:
+        if submission_blocked_reason:
+            st.warning(submission_blocked_reason)
+
+        with st.form("full-ex-submit-ex-rating", clear_on_submit=False, enter_to_submit=False):
+            submitted = st.form_submit_button(
+                "Update leaderboard rating",
+                disabled=(
+                    submission_in_progress
+                    or submission_file is None
+                    or submission_ratings is None
+                    or submission_error is not None
+                    or not supabase_configured()
+                    or selected_entry is None
+                    or submission_blocked_reason is not None
+                ),
+            )
+
+        if submitted and not submission_in_progress:
+            if submission_file is None:
+                st.error("Upload your arcade-highscores.json to submit.")
+            elif submission_error:
+                st.error(submission_error)
+            elif selected_entry is None:
+                st.error("Select a player from the full leaderboard.")
+            elif submission_blocked_reason:
+                st.warning(submission_blocked_reason)
+            elif submitted_rating is not None:
+                try:
+                    highscores = json.loads(submission_file.getvalue().decode("utf-8"))
+                except json.JSONDecodeError:
+                    st.error("That file doesn't look like valid JSON.")
+                else:
+                    st.session_state.full_ex_pending_submission = {
+                        "player_id": selected_entry.player_id,
+                        "ex_rating": submitted_rating,
+                        "highscores": highscores,
+                    }
+                    st.session_state.full_ex_submission_in_progress = True
+                    st.rerun()
+            else:
+                st.warning("No rated charts found in that file.")
+
+    if submission_in_progress and st.session_state.get("full_ex_pending_submission"):
+        pending = st.session_state.pop("full_ex_pending_submission")
+        with st.spinner("Saving rating update…"):
+            success, message = submit_full_ex_rating_update(
+                player_id=pending["player_id"],
+                ex_rating=pending["ex_rating"],
+                highscores=pending["highscores"],
+            )
+        st.session_state.full_ex_submission_in_progress = False
+        if success:
+            if submission_file is not None:
+                _record_full_ex_submission(
+                    pending["player_id"],
+                    submission_file,
+                    message,
+                )
+            _load_ranked_ex_leaderboard.clear()
+            st.rerun()
+        else:
+            st.warning(message)
+
+
 def _render_leaderboard_table(rankings: list) -> None:
     ranks = competition_ranks(rankings)
     st.dataframe(
@@ -503,6 +842,7 @@ def _render_full_ex_leaderboard_table(rankings: list) -> None:
                 "Rank": entry.rank,
                 "Player": entry.player,
                 "EX Rating": format_rating_display(entry.ex_rating),
+                "Last Updated": format_last_updated(entry.last_updated),
             }
             for entry in rankings
         ],
@@ -514,7 +854,7 @@ def _render_full_ex_leaderboard_table(rankings: list) -> None:
 
 @st.cache_data(ttl=300)
 def _load_ranked_ex_leaderboard():
-    return load_ex_leaderboard()
+    return load_ex_leaderboard_with_warning()
 
 
 def render_full_ex_rating_leaderboard() -> None:
@@ -543,31 +883,49 @@ def render_full_ex_rating_leaderboard() -> None:
         search_query = st.session_state.get("full-ex-leaderboard-search-input", "").strip()
 
         try:
-            rankings = _load_ranked_ex_leaderboard()
-            if search_query:
-                needle = search_query.casefold()
-                rankings = [entry for entry in rankings if needle in entry.player.casefold()]
+            full_rankings, supabase_load_failed = _load_ranked_ex_leaderboard()
         except Exception as error:
             st.error(f"Could not load full EX rating leaderboard: {error}")
             return
 
-        if not rankings:
-            if search_query:
-                st.caption("No players match your search.")
-            else:
-                st.info("No players found in the full EX rating leaderboard.")
+        if supabase_load_failed:
+            st.warning(SUPABASE_LOAD_ERROR_MESSAGE)
+
+        if not full_rankings:
+            st.info("No players found in the full EX rating leaderboard.")
             return
 
-        with st.container(key="full-ex-leaderboard-body", width="content"):
-            with st.container(key="full-ex-leaderboard-table"):
-                _render_full_ex_leaderboard_table(rankings)
+        display_rankings = full_rankings
+        if search_query:
+            needle = search_query.casefold()
+            display_rankings = [
+                entry for entry in full_rankings if needle in entry.player.casefold()
+            ]
 
-            with st.container(key="full-ex-leaderboard-search"):
-                st.text_input(
-                    "Search players",
-                    placeholder="Search by player name…",
-                    key="full-ex-leaderboard-search-input",
-                )
+        with st.container(
+            key="full-ex-leaderboard-layout",
+            horizontal=True,
+            gap="medium",
+            vertical_alignment="top",
+        ):
+            with st.container(key="full-ex-leaderboard-content", width="content"):
+                with st.container(key="full-ex-leaderboard-body", width="content"):
+                    if display_rankings:
+                        with st.container(key="full-ex-leaderboard-table"):
+                            _render_full_ex_leaderboard_table(display_rankings)
+                    elif search_query:
+                        st.caption("No players match your search.")
+
+                    with st.container(key="full-ex-leaderboard-search"):
+                        st.text_input(
+                            "Search players",
+                            placeholder="Search by player name…",
+                            key="full-ex-leaderboard-search-input",
+                        )
+
+            with st.container(border=True, key="full-ex-submit-panel", width="content"):
+                st.subheader("Submit your EX Rating")
+                _render_full_ex_submission_panel(full_rankings)
 
 
 def _render_submission_panel(

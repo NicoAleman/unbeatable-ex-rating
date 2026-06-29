@@ -50,19 +50,28 @@ def rank_leaderboard_entries(
     ]
 
 
-def load_ex_leaderboard(
+SUPABASE_LOAD_ERROR_MESSAGE = (
+    "Error: Failed to load latest ratings. Leaderboard may not be up to date."
+)
+
+
+def _load_ex_leaderboard_data(
     *,
     search: str = "",
     limit: int | None = None,
     baseline_path=EX_RATING_BASELINE_PATH,
-) -> list[ExLeaderboardEntry]:
+) -> tuple[list[ExLeaderboardEntry], bool]:
     baseline = load_baseline_leaderboard_csv(baseline_path)
     if not baseline:
-        return []
+        return [], False
 
     updated_ratings: dict[str, UpdatedRating] = {}
+    supabase_load_failed = False
     if supabase_configured():
-        updated_ratings = load_updated_ratings_from_supabase()
+        try:
+            updated_ratings = load_updated_ratings_from_supabase()
+        except Exception:
+            supabase_load_failed = True
 
     merged = merge_baseline_with_updated_ratings(baseline, updated_ratings)
     ranked = rank_leaderboard_entries(merged)
@@ -75,7 +84,34 @@ def load_ex_leaderboard(
     if limit is not None:
         ranked = ranked[:limit]
 
-    return ranked
+    return ranked, supabase_load_failed
+
+
+def load_ex_leaderboard(
+    *,
+    search: str = "",
+    limit: int | None = None,
+    baseline_path=EX_RATING_BASELINE_PATH,
+) -> list[ExLeaderboardEntry]:
+    rankings, _ = _load_ex_leaderboard_data(
+        search=search,
+        limit=limit,
+        baseline_path=baseline_path,
+    )
+    return rankings
+
+
+def load_ex_leaderboard_with_warning(
+    *,
+    search: str = "",
+    limit: int | None = None,
+    baseline_path=EX_RATING_BASELINE_PATH,
+) -> tuple[list[ExLeaderboardEntry], bool]:
+    return _load_ex_leaderboard_data(
+        search=search,
+        limit=limit,
+        baseline_path=baseline_path,
+    )
 
 
 def leaderboard_available(baseline_path=EX_RATING_BASELINE_PATH) -> bool:
