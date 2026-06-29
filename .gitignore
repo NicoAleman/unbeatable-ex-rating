@@ -3,8 +3,10 @@ __pycache__/
 *$py.class
 
 .streamlit/secrets.toml
+secrets/
 
 # Local test / export artifacts
 ex_rating_board.csv
 resources/Leaderboards_June27/
+resources/ex_rating_leaderboard.sqlite
 unbeatable-leaderboard-tools/

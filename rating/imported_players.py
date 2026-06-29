@@ -7,7 +7,7 @@ from pathlib import Path
 
 from rating.board import competition_ranks_for_values, player_ex_rating_with_completion
 from rating.calculator import rate_chart
-from rating.chart_levels import load_chart_rating_levels
+from rating.chart_levels import load_chart_rating_levels, resolve_chart_rating_level
 from rating.constants import DEFAULT_MAX_SCORES_PATH, FULL_EX_RATING_LEADERBOARD_PATH, LEADERBOARDS_JUNE27_DIR
 from rating.data import load_critical_max_scores
 from rating.formatting import format_rating_display
@@ -40,19 +40,6 @@ def resolve_max_score_chart_key(
         if chart_key.casefold() == key_lower:
             return chart_key
     return None
-
-
-def _resolve_score_level(
-    score: dict,
-    chart_key: str,
-    chart_rating_levels: dict[str, int],
-) -> int | None:
-    level = score.get("level")
-    if level is not None:
-        resolved = int(level)
-        return resolved if resolved > 0 else None
-    mapped = chart_rating_levels.get(chart_key)
-    return mapped if mapped and mapped > 0 else None
 
 
 def _leaderboard_score_to_highscore_entry(score: dict, chart_key: str, level: int) -> dict:
@@ -90,7 +77,7 @@ def build_ratings_from_imported_player(
         if chart_key is None:
             continue
 
-        level = _resolve_score_level(score, chart_key, levels)
+        level = resolve_chart_rating_level(chart_key, levels)
         if level is None:
             continue
 

@@ -20,6 +20,7 @@ from rating import formatting as formatting_module
 from rating import shared_rankings as shared_rankings_module
 from rating import submissions as submissions_module
 from rating import imported_players as imported_players_module
+from rating import ex_leaderboard_db as ex_leaderboard_db_module
 
 importlib.reload(data_module)
 importlib.reload(formatting_module)
@@ -27,9 +28,11 @@ importlib.reload(board_module)
 importlib.reload(submissions_module)
 importlib.reload(shared_rankings_module)
 importlib.reload(imported_players_module)
+importlib.reload(ex_leaderboard_db_module)
 
 COMPLETION_BONUS = constants_module.COMPLETION_BONUS
 DEFAULT_MAX_SCORES_PATH = constants_module.DEFAULT_MAX_SCORES_PATH
+EX_RATING_LEADERBOARD_DB_PATH = constants_module.EX_RATING_LEADERBOARD_DB_PATH
 FULL_EX_RATING_LEADERBOARD_PATH = constants_module.FULL_EX_RATING_LEADERBOARD_PATH
 TOP_N = constants_module.TOP_N
 format_potential_gain_display = formatting_module.format_potential_gain_display
@@ -47,7 +50,8 @@ validate_rating_submission = shared_rankings_module.validate_rating_submission
 pending_submission_url = submissions_module.pending_submission_url
 submit_ranking = submissions_module.submit_ranking
 submit_pending_ranking = submissions_module.submit_pending_ranking
-load_full_ex_leaderboard_csv = imported_players_module.load_full_ex_leaderboard_csv
+load_ex_leaderboard = ex_leaderboard_db_module.load_ex_leaderboard
+leaderboard_available = ex_leaderboard_db_module.leaderboard_available
 
 _DATE_FORMATS = ("%Y-%m-%d", "%m/%d/%Y", "%m/%d/%y", "%B %d, %Y", "%b %d, %Y")
 
@@ -521,38 +525,30 @@ def render_full_ex_rating_leaderboard() -> None:
             unsafe_allow_html=True,
         )
 
-        if not FULL_EX_RATING_LEADERBOARD_PATH.exists():
+        if not leaderboard_available():
             st.warning(
-                "Full EX rating leaderboard data has not been generated yet. "
-                "Run `python generate_full_ex_leaderboard.py` to build it."
+                "Full EX rating leaderboard data is not available yet. "
+                "Ensure `resources/full_ex_rating_leaderboard.csv` is present in the repo."
             )
             return
 
         try:
-            rankings = load_full_ex_leaderboard_csv()
+            search_query = st.session_state.get("full-ex-leaderboard-search-input", "").strip()
+            rankings = load_ex_leaderboard(search=search_query)
         except Exception as error:
             st.error(f"Could not load full EX rating leaderboard: {error}")
             return
 
         if not rankings:
-            st.info("No players found in the full EX rating leaderboard.")
+            if search_query:
+                st.caption("No players match your search.")
+            else:
+                st.info("No players found in the full EX rating leaderboard.")
             return
 
         with st.container(key="full-ex-leaderboard-body", width="content"):
-            search_query = st.session_state.get("full-ex-leaderboard-search-input", "").strip()
-            if search_query:
-                query = search_query.casefold()
-                filtered_rankings = [
-                    entry for entry in rankings if query in entry.player.casefold()
-                ]
-            else:
-                filtered_rankings = rankings
-
             with st.container(key="full-ex-leaderboard-table"):
-                if not filtered_rankings:
-                    st.caption("No players match your search.")
-                else:
-                    _render_full_ex_leaderboard_table(filtered_rankings)
+                _render_full_ex_leaderboard_table(rankings)
 
             with st.container(key="full-ex-leaderboard-search"):
                 st.text_input(

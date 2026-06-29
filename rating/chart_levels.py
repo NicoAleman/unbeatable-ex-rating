@@ -32,6 +32,22 @@ def load_chart_rating_levels(path: Path = CHART_RATING_LEVELS_PATH) -> dict[str,
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def resolve_chart_rating_level(
+    chart_key: str,
+    chart_rating_levels: dict[str, int],
+) -> int | None:
+    """Look up a chart's rating level by song/difficulty key."""
+    mapped = chart_rating_levels.get(chart_key)
+    if mapped is not None and mapped > 0:
+        return mapped
+
+    key_lower = chart_key.casefold()
+    for level_key, level in chart_rating_levels.items():
+        if level_key.casefold() == key_lower and level > 0:
+            return level
+    return None
+
+
 def write_chart_rating_levels(
     sources: list[Path],
     output_path: Path = CHART_RATING_LEVELS_PATH,
