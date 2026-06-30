@@ -872,6 +872,9 @@ def _render_potential_gains_expander(
             return
 
         ranks = competition_ranks_for_values([entry.potential_gain for entry in gains])
+        accuracy_column_label = (
+            "EX Accuracy" if rating_attr == "ex_rating" else "Accuracy"
+        )
         st.dataframe(
             [
                 {
@@ -879,6 +882,11 @@ def _render_potential_gains_expander(
                     "Chart": format_song_display_name(entry.chart.song),
                     "Difficulty": entry.chart.difficulty,
                     "Level": entry.chart.level,
+                    accuracy_column_label: (
+                        f"{entry.chart.ex_accuracy:.2f}"
+                        if rating_attr == "ex_rating"
+                        else f"{entry.chart.standard_accuracy:.2f}"
+                    ),
                     potential_column_label: format_potential_gain_display(entry.potential_gain),
                 }
                 for rank, entry in zip(ranks, gains, strict=True)
