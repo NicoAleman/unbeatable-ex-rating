@@ -2,6 +2,7 @@
 
 import contextlib
 import hashlib
+import html
 import importlib
 import json
 
@@ -22,6 +23,7 @@ from rating import formatting as formatting_module
 from rating import imported_players as imported_players_module
 from rating import ex_leaderboard_db as ex_leaderboard_db_module
 from rating import full_ex_submissions as full_ex_submissions_module
+from rating import leaderboard_activity as leaderboard_activity_module
 from rating import public_leaderboard as public_leaderboard_module
 from rating import supabase_leaderboard as supabase_leaderboard_module
 from rating.supabase_config import supabase_configured
@@ -34,6 +36,7 @@ importlib.reload(imported_players_module)
 importlib.reload(ex_leaderboard_db_module)
 importlib.reload(public_leaderboard_module)
 importlib.reload(full_ex_submissions_module)
+importlib.reload(leaderboard_activity_module)
 importlib.reload(supabase_leaderboard_module)
 
 COMPLETION_BONUS = constants_module.COMPLETION_BONUS
@@ -56,6 +59,8 @@ leaderboard_available = public_leaderboard_module.leaderboard_available
 SUPABASE_LOAD_ERROR_MESSAGE = public_leaderboard_module.SUPABASE_LOAD_ERROR_MESSAGE
 validate_full_ex_rating_submission = full_ex_submissions_module.validate_full_ex_rating_submission
 submit_full_ex_rating_update = full_ex_submissions_module.submit_full_ex_rating_update
+load_leaderboard_activity = leaderboard_activity_module.load_leaderboard_activity
+LeaderboardActivityEntry = leaderboard_activity_module.LeaderboardActivityEntry
 load_players_with_scores_from_supabase = supabase_leaderboard_module.load_players_with_scores_from_supabase
 load_player_ratings_from_supabase = supabase_leaderboard_module.load_player_ratings_from_supabase
 
@@ -99,6 +104,28 @@ def format_last_updated(value: object, *, include_time: bool = False) -> str:
     return dt.strftime("%B %d, %Y")
 
 
+def format_time_ago(value: datetime) -> str:
+    now = datetime.now(timezone.utc)
+    moment = value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+    moment = moment.astimezone(timezone.utc)
+    seconds = max(0, int((now - moment).total_seconds()))
+    if seconds < 45:
+        return "just now"
+    minutes = seconds // 60
+    if minutes < 60:
+        unit = "minute" if minutes == 1 else "minutes"
+        return f"{minutes} {unit} ago"
+    hours = minutes // 60
+    if hours < 24:
+        unit = "hour" if hours == 1 else "hours"
+        return f"{hours} {unit} ago"
+    days = hours // 24
+    if days < 7:
+        unit = "day" if days == 1 else "days"
+        return f"{days} {unit} ago"
+    return moment.astimezone().strftime("%b %d, %Y")
+
+
 st.set_page_config(
     page_title="Unbeatable EX Rating",
     page_icon="⭐",
@@ -115,6 +142,7 @@ LEADERBOARD_SIDE_BY_SIDE_MIN_PX = 1000
 SUBMIT_EX_RATING_PANEL_MAX_WIDTH_PX = 540
 # Last Updated column width (fits "June 26, 2026 5:00 PM").
 FULL_EX_LEADERBOARD_LAST_UPDATED_WIDTH_PX = 160
+LEADERBOARD_ACTIVITY_FEED_LIMIT = 15
 # Each board width at the side-by-side breakpoint (~1rem page inset per side, 1rem gap).
 BOARD_MAX_WIDTH_PX = (SIDE_BY_SIDE_MIN_VIEWPORT_PX - 64 - 16) // 2
 # Upload, search, picker, and radio in the board viewer (~240px auto × 1.5).
@@ -335,6 +363,78 @@ st.markdown(
         min-height: 4.5rem;
         margin: 0 auto;
         width: 0;
+    }}
+    .st-key-leaderboard-activity-feed {{
+        width: fit-content !important;
+        max-width: 100% !important;
+    }}
+    .st-key-leaderboard-activity-feed [data-testid="stMarkdownContainer"]:has(.activity-feed) {{
+        margin: 0 !important;
+        padding: 0 !important;
+    }}
+    .activity-feed {{
+        display: flex;
+        flex-direction: column;
+        gap: 0.65rem;
+        margin: 0.35rem 0 0;
+        max-width: 52rem;
+    }}
+    .activity-feed-item {{
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 1rem;
+        padding: 0.85rem 1rem 0.85rem 0.95rem;
+        border-radius: 0.65rem;
+        border: 1px solid rgba(120, 190, 255, 0.16);
+        border-left: 3px solid rgba(33, 195, 84, 0.85);
+        background: linear-gradient(
+            90deg,
+            rgba(33, 195, 84, 0.08) 0%,
+            rgba(14, 24, 48, 0.55) 18%,
+            rgba(10, 18, 36, 0.35) 100%
+        );
+        box-shadow: 0 1px 0 rgba(255, 255, 255, 0.04) inset;
+    }}
+    .activity-feed-main {{
+        display: flex;
+        flex-wrap: wrap;
+        align-items: baseline;
+        gap: 0.35rem 0.75rem;
+        min-width: 0;
+    }}
+    .activity-feed-player {{
+        font-weight: 700;
+        color: rgb(245, 245, 245);
+        font-size: 1rem;
+    }}
+    .activity-feed-rating {{
+        color: rgba(245, 245, 245, 0.92);
+        font-size: 0.975rem;
+        font-weight: 600;
+    }}
+    .activity-feed-rating-delta {{
+        color: rgb(33, 195, 84);
+        font-weight: 700;
+    }}
+    .activity-feed-rank {{
+        color: rgba(245, 245, 245, 0.82);
+        font-size: 0.925rem;
+    }}
+    .activity-feed-rank-delta {{
+        color: rgb(88, 214, 255);
+        font-weight: 700;
+    }}
+    .activity-feed-time {{
+        flex: 0 0 auto;
+        color: rgba(245, 245, 245, 0.45);
+        font-size: 0.8125rem;
+        white-space: nowrap;
+    }}
+    .activity-feed-empty {{
+        color: rgba(245, 245, 245, 0.55);
+        font-size: 0.925rem;
+        padding: 0.35rem 0;
     }}
     @media (min-width: {LEADERBOARD_SIDE_BY_SIDE_MIN_PX}px) {{
         .st-key-full-ex-leaderboard-layout .st-key-full-ex-leaderboard-content {{
@@ -952,6 +1052,8 @@ def _render_full_ex_submission_panel(
                         "player_id": selected_entry.player_id,
                         "ex_rating": submitted_rating,
                         "highscores": highscores,
+                        "prev_rating": selected_entry.ex_rating,
+                        "prev_rank": selected_entry.rank,
                     }
                     st.session_state.full_ex_submission_in_progress = True
                     st.rerun()
@@ -965,6 +1067,8 @@ def _render_full_ex_submission_panel(
                 player_id=pending["player_id"],
                 ex_rating=pending["ex_rating"],
                 highscores=pending["highscores"],
+                prev_rating=pending.get("prev_rating"),
+                prev_rank=pending.get("prev_rank"),
             )
         st.session_state.full_ex_submission_in_progress = False
         if success:
@@ -975,6 +1079,7 @@ def _render_full_ex_submission_panel(
                     message,
                 )
             _load_ranked_ex_leaderboard.clear()
+            _load_leaderboard_activity_feed.clear()
             st.rerun()
         else:
             st.warning(message)
@@ -1075,6 +1180,75 @@ def render_full_ex_rating_leaderboard(
             with st.container(border=True, key="full-ex-submit-panel", width="content"):
                 st.subheader("Submit your EX Rating")
                 _render_full_ex_submission_panel(full_rankings, uploaded, ratings)
+
+
+def _format_activity_rating_delta(prev_rating: float, new_rating: float) -> str:
+    delta = new_rating - prev_rating
+    if delta <= 0:
+        return ""
+    return f'<span class="activity-feed-rating-delta">(+{format_rating_display(delta)})</span>'
+
+
+def _format_activity_rank_delta(prev_rank: int, new_rank: int) -> str:
+    delta = prev_rank - new_rank
+    if delta > 0:
+        return f'<span class="activity-feed-rank-delta">(↑{delta})</span>'
+    if delta < 0:
+        return f'<span class="activity-feed-rank-delta">(↓{abs(delta)})</span>'
+    return ""
+
+
+def _render_activity_feed_item(entry: LeaderboardActivityEntry) -> str:
+    player = html.escape(entry.display_name)
+    rating = format_rating_display(entry.new_rating)
+    rating_delta = _format_activity_rating_delta(entry.prev_rating, entry.new_rating)
+    rank_delta = _format_activity_rank_delta(entry.prev_rank, entry.new_rank)
+    time_ago = html.escape(format_time_ago(entry.created_at))
+    rank_suffix = f" {rank_delta}" if rank_delta else ""
+    return (
+        '<div class="activity-feed-item">'
+        '<div class="activity-feed-main">'
+        f'<span class="activity-feed-player">{player}</span>'
+        f'<span class="activity-feed-rating">{rating} {rating_delta}</span>'
+        f'<span class="activity-feed-rank">Rank #{entry.new_rank}{rank_suffix}</span>'
+        "</div>"
+        f'<span class="activity-feed-time">{time_ago}</span>'
+        "</div>"
+    )
+
+
+@st.cache_data(ttl=60, show_spinner="Loading...")
+def _load_leaderboard_activity_feed(limit: int = LEADERBOARD_ACTIVITY_FEED_LIMIT):
+    return load_leaderboard_activity(limit=limit)
+
+
+def render_leaderboard_activity_feed() -> None:
+    st.divider()
+    with st.container(key="leaderboard-activity-feed", width="content"):
+        st.subheader("Leaderboard Activity Feed")
+
+        if not supabase_configured():
+            st.info("Activity feed will appear here once Supabase is configured.")
+            return
+
+        try:
+            activity = _load_leaderboard_activity_feed()
+        except Exception as error:
+            st.warning(f"Could not load leaderboard activity: {error}")
+            return
+
+        if not activity:
+            st.markdown(
+                '<p class="activity-feed-empty">No rating updates yet. Be the first to climb the board!</p>',
+                unsafe_allow_html=True,
+            )
+            return
+
+        items_html = "".join(_render_activity_feed_item(entry) for entry in activity)
+        st.markdown(
+            f'<div class="activity-feed">{items_html}</div>',
+            unsafe_allow_html=True,
+        )
 
 
 def render_ex_rating_info() -> None:
@@ -1283,4 +1457,5 @@ if ratings:
     )
 
 render_full_ex_rating_leaderboard(uploaded, ratings if uploaded is not None else None)
+render_leaderboard_activity_feed()
 render_ex_rating_info()
