@@ -12,6 +12,7 @@ LEADERBOARDS_JUNE27_DIR = PROJECT_ROOT / "resources" / "Leaderboards_June27"
 CHART_RATING_LEVELS_PATH = PROJECT_ROOT / "resources" / "chart_rating_levels.json"
 EX_RATING_LEADERBOARD_DB_PATH = PROJECT_ROOT / "resources" / "ex_rating_leaderboard.sqlite"
 RATING_OVERRIDES_PATH = PROJECT_ROOT / "resources" / "rating_overrides.json"
+REWIRED_KEYBOARD_IDENTIFIERS_PATH = PROJECT_ROOT / "resources" / "RewiredKeyboardElementIdentifiers.csv"
 EX_RATING_BASELINE_PATH = PROJECT_ROOT / "resources" / "ex_rating_baseline.csv"
 FULL_EX_RATING_LEADERBOARD_PATH = EX_RATING_BASELINE_PATH
 SHARED_EX_RANKINGS_PATH = PROJECT_ROOT / "resources" / "shared_ex_rankings.json"
