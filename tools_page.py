@@ -15,6 +15,10 @@ def render_other_tools_page() -> None:
 
     with st.container(key="tools-page-nav"):
         with st.container(key="tool-picker", horizontal=True, gap="small"):
+            if st.button("Back to EX Rating", key="nav-back-ex-rating"):
+                st.session_state.app_page = "ex_rating"
+                st.rerun()
+
             for tool_id, label in TOOLS.items():
                 button_type = "primary" if st.session_state.selected_tool == tool_id else "secondary"
                 if st.button(

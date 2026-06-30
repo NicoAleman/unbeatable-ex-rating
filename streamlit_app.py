@@ -33,8 +33,6 @@ from keybind_configurator_ui import (
     KEYBOARD_LEGEND_ITEM_GAP_PX,
     KEYBOARD_LEGEND_MARGIN_BOTTOM_PX,
     KEYBOARD_MAX_WIDTH_PX,
-    KEYBIND_SOURCE_PICKER_STACK_MAX_PX,
-    KEYBIND_SOURCE_SECTION_WIDTH_PX,
     build_keybind_action_row_css,
     build_keybind_keyboard_layout_css,
     build_keybind_layout_debug_css,
@@ -667,14 +665,16 @@ st.markdown(
         align-items: center !important;
     }}
     .st-key-page-header-row [data-testid="column"]:last-child [data-testid="stVerticalBlock"] {{
-        width: 100% !important;
+        width: auto !important;
+        align-items: flex-end !important;
     }}
     .st-key-page-header-row [data-testid="stButton"] {{
         padding-top: 1.35rem !important;
-        width: 100% !important;
+        width: auto !important;
     }}
     .st-key-page-header-row [data-testid="stButton"] button {{
-        width: 100% !important;
+        width: auto !important;
+        white-space: nowrap !important;
     }}
     .st-key-page-header-row [data-testid="stMarkdownContainer"]:has(.page-header-divider) {{
         margin: 0 !important;
@@ -687,130 +687,16 @@ st.markdown(
     .st-key-keybind-source-picker {{
         width: fit-content !important;
         max-width: 100% !important;
-        margin: 0.75rem auto 1.25rem auto !important;
+        margin: 0.75rem 0 1.25rem 0 !important;
     }}
     .st-key-keybind-source-picker [data-testid="stVerticalBlockBorderWrapper"],
     .st-key-keybind-source-picker [data-testid="stVerticalBlock"] {{
-        width: fit-content !important;
-        max-width: 100% !important;
-        align-items: center !important;
-    }}
-    .st-key-keybind-source-picker [data-testid="stHorizontalBlock"] {{
-        display: flex !important;
-        flex-direction: row !important;
-        flex-wrap: nowrap !important;
-        align-items: stretch !important;
-        justify-content: center !important;
-        width: fit-content !important;
-        min-width: fit-content !important;
-        max-width: 100% !important;
-        gap: 0.75rem !important;
-        margin: 0 !important;
-        padding: 0 !important;
-        flex-shrink: 0 !important;
-    }}
-    .st-key-keybind-source-picker [data-testid="column"]:first-child,
-    .st-key-keybind-source-picker [data-testid="column"]:last-child {{
-        flex: 0 0 {KEYBIND_SOURCE_SECTION_WIDTH_PX}px !important;
-        width: {KEYBIND_SOURCE_SECTION_WIDTH_PX}px !important;
-        min-width: {KEYBIND_SOURCE_SECTION_WIDTH_PX}px !important;
-        max-width: {KEYBIND_SOURCE_SECTION_WIDTH_PX}px !important;
-        display: flex !important;
-        flex-direction: column !important;
-        align-items: center !important;
-        justify-content: flex-start !important;
-        flex-shrink: 0 !important;
-    }}
-    .st-key-keybind-source-picker [data-testid="column"]:nth-child(2) {{
-        flex: 0 0 auto !important;
-        width: auto !important;
-        min-width: 0 !important;
-        align-self: stretch !important;
-        display: flex !important;
-        align-items: stretch !important;
-        justify-content: center !important;
-        flex-shrink: 0 !important;
-    }}
-    .st-key-keybind-source-picker [data-testid="column"]:first-child [data-testid="stVerticalBlock"],
-    .st-key-keybind-source-picker [data-testid="column"]:last-child [data-testid="stVerticalBlock"],
-    .st-key-keybind-source-picker [data-testid="column"]:first-child [data-testid="stVerticalBlockBorderWrapper"],
-    .st-key-keybind-source-picker [data-testid="column"]:last-child [data-testid="stVerticalBlockBorderWrapper"] {{
         width: 100% !important;
-        min-width: 100% !important;
         max-width: 100% !important;
-        align-items: center !important;
-        flex-shrink: 0 !important;
-        box-sizing: border-box !important;
-    }}
-    .st-key-keybind-source-picker .keybind-source-label {{
-        display: block;
-        width: 100%;
-        margin: 0 0 0.35rem 0;
-        text-align: center;
-        white-space: nowrap;
-    }}
-    .st-key-keybind-source-picker [data-testid="column"]:first-child [data-testid="stMarkdownContainer"]:has(.keybind-source-label),
-    .st-key-keybind-source-picker [data-testid="column"]:last-child [data-testid="stMarkdownContainer"]:has(.keybind-source-label) {{
-        width: 100% !important;
-        margin: 0 !important;
-        padding: 0 !important;
-    }}
-    .st-key-keybind-source-picker [data-testid="column"]:first-child [data-testid="stMarkdownContainer"]:has(.keybind-source-label) p,
-    .st-key-keybind-source-picker [data-testid="column"]:last-child [data-testid="stMarkdownContainer"]:has(.keybind-source-label) p {{
-        margin: 0 !important;
-        text-align: center !important;
-    }}
-    .st-key-keybind-source-picker [data-testid="column"]:first-child [data-testid="stButton"],
-    .st-key-keybind-source-picker [data-testid="column"]:last-child [data-testid="stButton"] {{
-        width: 100% !important;
-        min-width: 100% !important;
-        max-width: 100% !important;
-        margin: 0 !important;
-        flex-shrink: 0 !important;
-    }}
-    .st-key-keybind-source-picker [data-testid="column"]:first-child [data-testid="stButton"] button,
-    .st-key-keybind-source-picker [data-testid="column"]:last-child [data-testid="stButton"] button {{
-        width: 100% !important;
-        min-width: 100% !important;
-        max-width: 100% !important;
-        white-space: nowrap !important;
-        margin: 0 !important;
-        flex-shrink: 0 !important;
-    }}
-    .st-key-keybind-source-picker [data-testid="stMarkdownContainer"]:has(.keybind-source-divider-wrap) {{
-        display: flex !important;
-        align-items: stretch !important;
-        height: 100% !important;
-        width: 100% !important;
-        margin: 0 !important;
-        padding: 0 !important;
-    }}
-    .st-key-keybind-source-picker .keybind-source-divider-wrap {{
-        display: flex;
-        align-items: stretch;
-        justify-content: center;
-        width: 100%;
-        height: 100%;
-        min-height: 4.75rem;
-        margin: 0 1.3rem 0 0;
-    }}
-    .st-key-keybind-source-picker .keybind-source-divider--vertical {{
-        border-top: none;
-        border-left: 1px solid rgba(250, 250, 250, 0.22);
-        height: 100%;
-        min-height: 4.75rem;
-        width: 0;
-    }}
-    .st-key-keybind-source-picker .keybind-source-divider--horizontal {{
-        display: none;
-        border-left: none;
-        border-top: 1px solid rgba(250, 250, 250, 0.22);
-        width: 100%;
-        height: 0;
-        margin: 0.65rem 0;
+        align-items: flex-start !important;
     }}
     .st-key-keybind-source-picker [data-testid="stFileUploader"] {{
-        width: max-content !important;
+        width: {BOARD_VIEWER_CONTROL_WIDTH_PX}px !important;
         min-width: {BOARD_VIEWER_CONTROL_WIDTH_PX}px !important;
         max-width: min(100%, {BOARD_VIEWER_CONTROL_WIDTH_PX}px) !important;
         box-sizing: border-box !important;
@@ -827,32 +713,6 @@ st.markdown(
     }}
     .st-key-keybind-source-picker [data-testid="stFileUploaderDropzoneInstructions"] {{
         align-self: center !important;
-    }}
-    @media (max-width: {KEYBIND_SOURCE_PICKER_STACK_MAX_PX}px) {{
-        .st-key-keybind-source-picker [data-testid="stHorizontalBlock"] {{
-            flex-direction: column !important;
-        }}
-        .st-key-keybind-source-picker .keybind-source-divider-wrap {{
-            min-height: 0;
-            height: auto;
-        }}
-        .st-key-keybind-source-picker .keybind-source-divider--vertical {{
-            display: none;
-        }}
-        .st-key-keybind-source-picker .keybind-source-divider--horizontal {{
-            display: block;
-        }}
-        .st-key-keybind-source-picker [data-testid="column"]:first-child,
-        .st-key-keybind-source-picker [data-testid="column"]:last-child {{
-            flex: 0 0 {KEYBIND_SOURCE_SECTION_WIDTH_PX}px !important;
-            width: {KEYBIND_SOURCE_SECTION_WIDTH_PX}px !important;
-            min-width: {KEYBIND_SOURCE_SECTION_WIDTH_PX}px !important;
-            max-width: min(100%, {KEYBIND_SOURCE_SECTION_WIDTH_PX}px) !important;
-            align-items: center !important;
-        }}
-        .st-key-keybind-source-picker [data-testid="stMarkdownContainer"]:has(.keybind-source-divider-wrap) {{
-            height: auto !important;
-        }}
     }}
     .st-key-keybind-keyboard {{
         width: 100% !important;
@@ -878,6 +738,12 @@ st.markdown(
     .st-key-keybind-legend [data-testid="stMarkdownContainer"] p {{
         margin: 0 !important;
     }}
+    .st-key-keybind-workspace .keybind-cycle-instructions {{
+        width: 100%;
+        margin: 0 0 0.5rem 0;
+        text-align: center;
+        color: rgba(250, 250, 250, 0.88);
+    }}
     .st-key-keybind-legend .keybind-legend {{
         display: flex !important;
         align-items: center !important;
@@ -900,6 +766,12 @@ st.markdown(
         margin: 0 !important;
         padding: 0 !important;
     }}
+    .st-key-tool-picker [data-testid="stVerticalBlock"],
+    .st-key-tool-picker [data-testid="stVerticalBlockBorderWrapper"],
+    .st-key-tool-picker .element-container {{
+        margin: 0 !important;
+        padding: 0 !important;
+    }}
     .st-key-tool-picker [data-testid="stHorizontalBlock"] {{
         width: fit-content !important;
         gap: 0.5rem !important;
@@ -919,6 +791,8 @@ st.markdown(
     }}
     .st-key-tools-page-nav [data-testid="stVerticalBlock"] {{
         gap: 0 !important;
+        margin-top: 0 !important;
+        padding-top: 0 !important;
     }}
     .st-key-tools-page-nav [data-testid="stMarkdownContainer"] {{
         margin: 0 !important;
@@ -1778,16 +1652,6 @@ def _init_app_session_state() -> None:
         st.session_state.app_page = "ex_rating"
 
 
-def _render_nav_button() -> None:
-    if st.session_state.app_page == "tools":
-        if st.button("Back to EX Rating", key="nav-back-ex-rating", use_container_width=True):
-            st.session_state.app_page = "ex_rating"
-            st.rerun()
-    elif st.button("Other Tools", key="nav-other-tools", use_container_width=True):
-        st.session_state.app_page = "tools"
-        st.rerun()
-
-
 def _render_page_header(
     title: str,
     subtitle: str,
@@ -1796,27 +1660,33 @@ def _render_page_header(
     divider_margin_bottom_rem: float = 1.0,
 ) -> None:
     with st.container(key="page-header-row"):
-        header_col, nav_col = st.columns([8, 1.35], vertical_alignment="center")
-        with header_col:
-            st.markdown(
-                f"""
-                <div class="page-header">
-                    <h1 style="margin: 0 0 0.1rem 0; padding-top: 0.15rem; line-height: 1.25; font-size: 2.25rem;">
-                        {html.escape(title)}
-                    </h1>
-                    <p style="margin: -0.55rem 0 0; font-size: {subtitle_font_size_rem}rem; font-weight: 500; opacity: 0.9;">
-                        {html.escape(subtitle)}
-                    </p>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-        with nav_col:
-            _render_nav_button()
+        st.markdown(
+            f"""
+            <div class="page-header">
+                <h1 style="margin: 0 0 0.1rem 0; padding-top: 0.15rem; line-height: 1.25; font-size: 2.25rem;">
+                    {html.escape(title)}
+                </h1>
+                <p style="margin: -0.55rem 0 0; font-size: {subtitle_font_size_rem}rem; font-weight: 500; opacity: 0.9;">
+                    {html.escape(subtitle)}
+                </p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
         st.markdown(
             f'<hr class="page-header-divider" style="margin: 0.5rem 0 {divider_margin_bottom_rem}rem 0;" aria-hidden="true">',
             unsafe_allow_html=True,
         )
+
+
+def _render_main_tools_nav() -> None:
+    with st.container(key="tools-page-nav"):
+        with st.container(key="tool-picker", horizontal=True, gap="small"):
+            if st.button("Other Tools", key="nav-other-tools"):
+                st.session_state.app_page = "tools"
+                st.rerun()
+
+        st.divider()
 
 
 _init_app_session_state()
@@ -1831,7 +1701,12 @@ if st.session_state.app_page == "tools":
     render_other_tools_page()
     st.stop()
 
-_render_page_header("Unbeatable EX Rating", "A Community-Created EX Rating System by FacadeNico")
+_render_page_header(
+    "Unbeatable EX Rating",
+    "A Community-Created EX Rating System by FacadeNico",
+    divider_margin_bottom_rem=0.5,
+)
+_render_main_tools_nav()
 st.markdown(
     "Upload your **arcade-highscores.json** or search for a player to see rating boards. "
     "Only Classic speed charts are rated (no Double Time / Half Time or custom charts)."

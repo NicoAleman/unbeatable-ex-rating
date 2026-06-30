@@ -4,25 +4,18 @@ from __future__ import annotations
 
 import html
 import json
-from pathlib import Path
-from typing import Literal
 
 import streamlit as st
 
 from rating.keybind_configurator import (
-    DEFAULT_INPUT_BINDINGS_PATH,
     KEYBOARD_ROW_COUNT,
     KEYBOARD_ROWS,
     LaneBindingState,
     apply_lane_bindings,
     cycle_lane_binding,
-    load_input_bindings_file,
     parse_lane_bindings,
-    save_input_bindings_file,
     serialize_input_bindings,
 )
-
-KeybindLoadSource = Literal["manual", "auto"]
 
 # Keyboard layout tuning — change these values to test different sizes.
 KEYBOARD_MAX_WIDTH_PX = 960
@@ -33,13 +26,14 @@ KEYBOARD_DOWN_COLOR = "#ff7896"
 KEYBOARD_UP_COLOR = "#58d6ff"
 KEYBOARD_LEGEND_ITEM_GAP_PX = 32
 KEYBOARD_LEGEND_MARGIN_BOTTOM_PX = 24
-# Manual / Auto source picker stacks below this viewport width.
-KEYBIND_SOURCE_PICKER_STACK_MAX_PX = 640
 KEYBIND_BINDING_COUNT_FONT_SIZE_REM = 1.25
 # Toggle colored outlines on keybind layout containers for debugging alignment.
 KEYBIND_LAYOUT_DEBUG_BORDERS = False
-# Fixed width for each Auto / Manual picker section (fits longest button label on one line).
+# Fixed width for the Input-Bindings upload controls.
 KEYBIND_SOURCE_SECTION_WIDTH_PX = 360
+KEYBIND_EXAMPLE_INPUT_BINDINGS_PATH = (
+    r"C:\Users\<YourName>\AppData\LocalLow\D-CELL GAMES\UNBEATABLE\SYSTEM\Input-Bindings.json"
+)
 
 
 def _init_keybind_session_state() -> None:
@@ -55,6 +49,8 @@ def _init_keybind_session_state() -> None:
         st.session_state.keybind_load_source = None
     if "keybind_source_path" not in st.session_state:
         st.session_state.keybind_source_path = None
+    if "keybind_upload_reset_id" not in st.session_state:
+        st.session_state.keybind_upload_reset_id = 0
 
 
 def _clear_keybind_config() -> None:
@@ -64,35 +60,13 @@ def _clear_keybind_config() -> None:
     st.session_state.keybind_loaded_file_id = None
     st.session_state.keybind_load_source = None
     st.session_state.keybind_source_path = None
+    st.session_state.keybind_upload_reset_id += 1
 
 
-def _pick_input_bindings_file() -> Path | None:
+def _load_keybind_from_upload(file_name: str, file_bytes: bytes) -> None:
     try:
-        import tkinter as tk
-        from tkinter import filedialog
-    except ImportError:
-        return None
-
-    initial_dir = DEFAULT_INPUT_BINDINGS_PATH.parent
-    root = tk.Tk()
-    root.withdraw()
-    root.attributes("-topmost", True)
-    root.update()
-    selected = filedialog.askopenfilename(
-        parent=root,
-        title="Select Input-Bindings.json",
-        filetypes=[("JSON files", "*.json"), ("All files", "*.*")],
-        initialdir=str(initial_dir if initial_dir.exists() else Path.home()),
-        initialfile="Input-Bindings.json",
-    )
-    root.destroy()
-    return Path(selected) if selected else None
-
-
-def _load_keybind_from_path(path: Path, *, source: KeybindLoadSource) -> None:
-    try:
-        data = load_input_bindings_file(path)
-    except (OSError, json.JSONDecodeError) as error:
+        data = json.loads(file_bytes.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
         st.error(f"Could not load file: {error}")
         return
 
@@ -102,12 +76,11 @@ def _load_keybind_from_path(path: Path, *, source: KeybindLoadSource) -> None:
         st.error(f"Could not read lane bindings from that file: {error}")
         return
 
-    file_id = f"{source}:{path}"
+    file_id = f"upload:{file_name}:{len(file_bytes)}:{hash(file_bytes)}"
     _load_keybind_file(
         data,
         file_id=file_id,
-        source=source,
-        source_path=path,
+        source="upload",
     )
     st.rerun()
 
@@ -116,8 +89,7 @@ def _load_keybind_file(
     data: dict[str, str],
     *,
     file_id: str,
-    source: KeybindLoadSource,
-    source_path: Path | None = None,
+    source: str,
 ) -> None:
     bindings = parse_lane_bindings(data)
     st.session_state.keybind_source_data = data
@@ -125,7 +97,7 @@ def _load_keybind_file(
     st.session_state.keybind_bindings = dict(bindings)
     st.session_state.keybind_loaded_file_id = file_id
     st.session_state.keybind_load_source = source
-    st.session_state.keybind_source_path = str(source_path) if source_path is not None else None
+    st.session_state.keybind_source_path = None
 
 
 def _keyboard_row_weights(
@@ -280,6 +252,19 @@ def build_keybind_source_loaded_css() -> str:
     }}
     .st-key-keybind-source-loaded [data-testid="stButton"] button {{
         width: 100% !important;
+    }}
+    .st-key-keybind-upload-prompt,
+    .st-key-keybind-upload-prompt [data-testid="stVerticalBlock"],
+    .st-key-keybind-upload-prompt [data-testid="stVerticalBlockBorderWrapper"] {{
+        width: 100% !important;
+        max-width: 100% !important;
+        align-items: flex-start !important;
+    }}
+    .st-key-keybind-upload-prompt [data-testid="stAlert"] {{
+        width: fit-content !important;
+        max-width: 100% !important;
+        margin: 0 !important;
+        box-sizing: border-box !important;
     }}
     """
 
@@ -572,9 +557,6 @@ def _render_action_row(
         f"</div></div>"
     )
     output_data = apply_lane_bindings(source_data, bindings)
-    source_path_raw = st.session_state.keybind_source_path
-    save_error: str | None = None
-    save_success: str | None = None
 
     with st.container(key="keybind-action-row"):
         with st.container(key="keybind-action-controls"):
@@ -589,31 +571,13 @@ def _render_action_row(
                     st.session_state.keybind_bindings = dict(baseline)
                     st.rerun()
             with save_col:
-                if source_path_raw:
-                    source_path = Path(source_path_raw)
-                    if st.button("Save Input-Bindings.json", key="keybind-save"):
-                        try:
-                            save_input_bindings_file(source_path, output_data)
-                        except OSError as error:
-                            save_error = f"Could not save file: {error}"
-                        else:
-                            st.session_state.keybind_baseline = dict(bindings)
-                            save_success = f"Saved to `{source_path}`"
-                else:
-                    st.download_button(
-                        "Download Input-Bindings.json",
-                        data=serialize_input_bindings(output_data),
-                        file_name="Input-Bindings.json",
-                        mime="application/json",
-                        key="keybind-download",
-                    )
-
-        if save_error or save_success:
-            with st.container(key="keybind-action-feedback"):
-                if save_error:
-                    st.error(save_error)
-                else:
-                    st.success(save_success)
+                st.download_button(
+                    "Download Input-Bindings.json",
+                    data=serialize_input_bindings(output_data),
+                    file_name="Input-Bindings.json",
+                    mime="application/json",
+                    key="keybind-download",
+                )
 
 
 def _render_keyboard_grid(bindings: dict[int, LaneBindingState]) -> None:
@@ -624,94 +588,29 @@ def _render_keyboard_grid(bindings: dict[int, LaneBindingState]) -> None:
                 _render_keyboard_row(row, row_index=row_index, bindings=bindings)
 
 
-def _render_source_divider() -> None:
-    st.markdown(
-        """
-        <div class="keybind-source-divider-wrap">
-            <div class="keybind-source-divider--vertical" aria-hidden="true"></div>
-            <div class="keybind-source-divider--horizontal" aria-hidden="true"></div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
-def _render_source_section_label(label: str) -> None:
-    safe_label = html.escape(label)
-    st.markdown(
-        f'<div class="keybind-source-label"><strong>{safe_label}</strong></div>',
-        unsafe_allow_html=True,
-    )
-
-
-def _render_manual_source_section(*, show_only: bool) -> None:
-    _render_source_section_label("Manual")
-
-    if show_only:
-        source_path = st.session_state.keybind_source_path
-        if source_path:
-            st.caption(f"Loaded from `{source_path}`")
-        if st.button(
-            "Discard Selected Configuration",
-            key="keybind-discard-manual",
-            use_container_width=True,
-        ):
-            _clear_keybind_config()
-            st.rerun()
-        return
-
-    if st.button(
-        "Select Input-Bindings.json",
-        key="keybind-manual-select",
-    ):
-        path = _pick_input_bindings_file()
-        if path is None:
-            st.warning("No file selected.")
-        else:
-            _load_keybind_from_path(path, source="manual")
-
-
-def _render_auto_source_section(*, show_only: bool) -> None:
-    _render_source_section_label("Auto")
-    local_exists = DEFAULT_INPUT_BINDINGS_PATH.exists()
-    load_source = st.session_state.keybind_load_source
-
-    if load_source == "auto":
-        if st.button(
-            "Discard Detected Configuration",
-            key="keybind-discard-detected",
-            use_container_width=True,
-        ):
-            _clear_keybind_config()
-            st.rerun()
-    elif local_exists:
-        if st.button(
-            "Detect Local Configuration",
-            key="keybind-auto-detect",
-        ):
-            _load_keybind_from_path(DEFAULT_INPUT_BINDINGS_PATH, source="auto")
-    elif not show_only:
-        st.caption("Local Input-Bindings.json was not found.")
-
-
 def _render_source_picker() -> None:
-    load_source = st.session_state.keybind_load_source
-
-    if load_source is None:
+    if st.session_state.keybind_source_data is None:
         with st.container(key="keybind-source-picker"):
-            auto_col, divider_col, manual_col = st.columns([1, 0.06, 1], gap="small")
-            with auto_col:
-                _render_auto_source_section(show_only=False)
-            with divider_col:
-                _render_source_divider()
-            with manual_col:
-                _render_manual_source_section(show_only=False)
-    elif load_source == "manual":
-        with st.container(key="keybind-source-loaded"):
-            _render_manual_source_section(show_only=True)
+            uploaded = st.file_uploader(
+                "Input-Bindings.json",
+                type="json",
+                key=f"keybind-input-bindings-{st.session_state.keybind_upload_reset_id}",
+            )
+            if uploaded is not None:
+                file_bytes = uploaded.getvalue()
+                file_id = f"upload:{uploaded.name}:{len(file_bytes)}:{hash(file_bytes)}"
+                if st.session_state.keybind_loaded_file_id != file_id:
+                    _load_keybind_from_upload(uploaded.name, file_bytes)
     else:
         with st.container(key="keybind-source-loaded"):
-            _render_auto_source_section(show_only=True)
+            st.caption("Loaded `Input-Bindings.json`")
+            if st.button(
+                "Discard Selected Configuration",
+                key="keybind-discard-uploaded",
+                use_container_width=True,
+            ):
+                _clear_keybind_config()
+                st.rerun()
 
 
 def render_keybind_configurator() -> None:
@@ -720,16 +619,16 @@ def render_keybind_configurator() -> None:
     st.subheader("Keybind Configurator")
     st.markdown(
         "Configure extra **Up** and **Down** lane keys for UNBEATABLE by editing "
-        "`Input-Bindings.json`. Saved changes are written back to the file you loaded.\n\n"
+        "`Input-Bindings.json`. Download the edited file when you're finished.\n\n"
         "On Windows, this file is usually at "
-        r"`C:\Users\<YourName>\AppData\LocalLow\D-CELL GAMES\UNBEATABLE\SYSTEM\Input-Bindings.json`."
+        f"`{KEYBIND_EXAMPLE_INPUT_BINDINGS_PATH}`."
     )
-    st.caption("Click a key to cycle: Unbound → Down (Red) → Up (Blue) → Unbound.")
 
     _render_source_picker()
 
     if st.session_state.keybind_source_data is None:
-        st.info("Choose Detect Local Configuration or Manual upload to begin.")
+        with st.container(key="keybind-upload-prompt"):
+            st.info("Upload Input-Bindings.json to begin.")
         return
 
     bindings: dict[int, LaneBindingState] = dict(st.session_state.keybind_bindings)
@@ -737,6 +636,17 @@ def render_keybind_configurator() -> None:
     has_changes = bindings != baseline
 
     with st.container(key="keybind-workspace"):
+        st.markdown(
+            f"""
+            <div class="keybind-cycle-instructions">
+                <strong>Click a key to cycle:</strong>
+                Unbound → <span style="color:{KEYBOARD_DOWN_COLOR}; font-weight: 600;">Down</span>
+                → <span style="color:{KEYBOARD_UP_COLOR}; font-weight: 600;">Up</span> → Unbound.
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
         with st.container(key="keybind-legend"):
             st.markdown(
                 f"""
