@@ -1,4 +1,4 @@
-DISPLAY_RATING_DECIMALS = 3
+from rating.constants import DEFAULT_MAX_SCORES_PATH, DISPLAY_RATING_DECIMALS
 
 
 def format_rating_display(value: float) -> str:

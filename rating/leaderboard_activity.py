@@ -3,11 +3,10 @@ from datetime import datetime, timezone
 
 import psycopg2.errors
 
-from rating.baseline_leaderboard import UpdatedRating, load_baseline_leaderboard_csv
+from rating.baseline_leaderboard import load_baseline_leaderboard_csv
 from rating.constants import EX_RATING_BASELINE_PATH
-from rating.public_leaderboard import merge_baseline_with_updated_ratings, rank_leaderboard_entries
 from rating.supabase_config import supabase_configured
-from rating.supabase_leaderboard import _connect_postgres, _format_timestamp, load_updated_ratings_from_supabase
+from rating.supabase_leaderboard import _connect_postgres, _format_timestamp
 
 
 @dataclass(frozen=True)
@@ -19,28 +18,6 @@ class LeaderboardActivityEntry:
     prev_rank: int
     new_rank: int
     created_at: datetime
-
-
-def compute_player_rank(
-    player_id: str,
-    *,
-    rating_overrides: dict[str, UpdatedRating] | None = None,
-    baseline_path=EX_RATING_BASELINE_PATH,
-) -> int | None:
-    baseline = load_baseline_leaderboard_csv(baseline_path)
-    if not baseline:
-        return None
-
-    overrides = rating_overrides
-    if overrides is None:
-        overrides = load_updated_ratings_from_supabase() if supabase_configured() else {}
-
-    merged = merge_baseline_with_updated_ratings(baseline, overrides)
-    ranked = rank_leaderboard_entries(merged)
-    for entry in ranked:
-        if entry.player_id == player_id:
-            return entry.rank
-    return None
 
 
 def record_leaderboard_activity(

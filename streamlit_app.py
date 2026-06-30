@@ -7,6 +7,7 @@ import importlib
 import json
 
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 import streamlit as st
 
@@ -65,10 +66,12 @@ load_players_with_scores_from_supabase = supabase_leaderboard_module.load_player
 load_player_ratings_from_supabase = supabase_leaderboard_module.load_player_ratings_from_supabase
 
 _DATE_FORMATS = ("%Y-%m-%d", "%m/%d/%Y", "%m/%d/%y", "%B %d, %Y", "%b %d, %Y")
+# Streamlit Cloud has no user locale; show calendar dates in US Eastern.
+DISPLAY_TIMEZONE = ZoneInfo("America/New_York")
 
 
-def _local_timezone():
-    return datetime.now().astimezone().tzinfo
+def _display_timezone():
+    return DISPLAY_TIMEZONE
 
 
 def parse_last_updated(value: object) -> datetime | None:
@@ -80,28 +83,26 @@ def parse_last_updated(value: object) -> datetime | None:
     try:
         dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
         if dt.tzinfo is not None:
-            return dt.astimezone()
+            return dt.astimezone(_display_timezone())
         if dt.hour or dt.minute or dt.second or dt.microsecond:
-            return dt.replace(tzinfo=timezone.utc).astimezone()
-        return dt.replace(tzinfo=_local_timezone())
+            return dt.replace(tzinfo=timezone.utc).astimezone(_display_timezone())
+        return dt.replace(tzinfo=_display_timezone())
     except ValueError:
         pass
     for fmt in _DATE_FORMATS:
         try:
-            return datetime.strptime(text, fmt).replace(tzinfo=_local_timezone())
+            return datetime.strptime(text, fmt).replace(tzinfo=_display_timezone())
         except ValueError:
             continue
     return None
 
 
-def format_last_updated(value: object, *, include_time: bool = False) -> str:
+def format_last_updated(value: object) -> str:
     dt = parse_last_updated(value)
     if dt is None:
         text = str(value).strip() if value is not None else ""
         return text if text else "—"
-    if include_time:
-        return dt.strftime("%B %d, %Y %I:%M %p")
-    return dt.strftime("%B %d, %Y")
+    return dt.astimezone(_display_timezone()).strftime("%B %d, %Y")
 
 
 def format_time_ago(value: datetime) -> str:
@@ -123,7 +124,7 @@ def format_time_ago(value: datetime) -> str:
     if days < 7:
         unit = "day" if days == 1 else "days"
         return f"{days} {unit} ago"
-    return moment.astimezone().strftime("%b %d, %Y")
+    return moment.astimezone(_display_timezone()).strftime("%b %d, %Y")
 
 
 st.set_page_config(
@@ -140,9 +141,13 @@ SIDE_BY_SIDE_MIN_VIEWPORT_PX = 1900
 LEADERBOARD_SIDE_BY_SIDE_MIN_PX = 1000
 # Max width for the submission panel when shown beside the leaderboard.
 SUBMIT_EX_RATING_PANEL_MAX_WIDTH_PX = 540
-# Last Updated column width (fits "June 26, 2026 5:00 PM").
-FULL_EX_LEADERBOARD_LAST_UPDATED_WIDTH_PX = 160
 LEADERBOARD_ACTIVITY_FEED_LIMIT = 15
+LEADERBOARD_ACTIVITY_FEED_VISIBLE_COUNT = 6
+# Activity feed column widths — tweak these to adjust layout (used in CSS below).
+ACTIVITY_FEED_NAME_WIDTH_CH = 18  # names longer than this truncate with …
+ACTIVITY_FEED_RATING_GROUP_WIDTH_CH = 14  # keeps rating values and timestamps aligned
+ACTIVITY_FEED_RANK_GROUP_WIDTH_CH = 14  # fits "Rank #999 (↑99)"; keeps timestamps aligned
+ACTIVITY_FEED_TIME_WIDTH_CH = 10  # fits "59 minutes ago"
 # Each board width at the side-by-side breakpoint (~1rem page inset per side, 1rem gap).
 BOARD_MAX_WIDTH_PX = (SIDE_BY_SIDE_MIN_VIEWPORT_PX - 64 - 16) // 2
 # Upload, search, picker, and radio in the board viewer (~240px auto × 1.5).
@@ -368,65 +373,139 @@ st.markdown(
         width: fit-content !important;
         max-width: 100% !important;
     }}
-    .st-key-leaderboard-activity-feed [data-testid="stMarkdownContainer"]:has(.activity-feed) {{
+    .st-key-leaderboard-activity-feed [data-testid="stMarkdownContainer"]:has(.activity-feed-viewport) {{
         margin: 0 !important;
         padding: 0 !important;
+    }}
+    .activity-feed-viewport {{
+        --activity-feed-item-height: 3.35rem;
+        --activity-feed-item-gap: 0.65rem;
+        --activity-feed-visible-items: {LEADERBOARD_ACTIVITY_FEED_VISIBLE_COUNT};
+        --activity-feed-fade-height: 2.75rem;
+        --activity-feed-name-width: {ACTIVITY_FEED_NAME_WIDTH_CH}ch;
+        --activity-feed-rating-group-width: {ACTIVITY_FEED_RATING_GROUP_WIDTH_CH}ch;
+        --activity-feed-rank-group-width: {ACTIVITY_FEED_RANK_GROUP_WIDTH_CH}ch;
+        --activity-feed-time-width: {ACTIVITY_FEED_TIME_WIDTH_CH}ch;
+        margin: 0.35rem 0 0;
+        width: fit-content;
+        max-width: 100%;
+        position: relative;
+    }}
+    .activity-feed-viewport--scrollable {{
+        max-height: calc(
+            var(--activity-feed-visible-items) * var(--activity-feed-item-height)
+            + (var(--activity-feed-visible-items) - 1) * var(--activity-feed-item-gap)
+        );
+        overflow-x: hidden;
+        overflow-y: auto;
+        padding-right: 0.35rem;
+        scrollbar-color: rgba(245, 245, 245, 0.28) transparent;
+        scrollbar-width: thin;
+    }}
+    .activity-feed-viewport--scrollable .activity-feed {{
+        padding-bottom: var(--activity-feed-fade-height);
+    }}
+    .activity-feed-viewport--scrollable::-webkit-scrollbar {{
+        width: 0.45rem;
+    }}
+    .activity-feed-viewport--scrollable::-webkit-scrollbar-thumb {{
+        background: rgba(245, 245, 245, 0.28);
+        border-radius: 999px;
+    }}
+    .activity-feed-viewport--scrollable::after {{
+        content: "";
+        position: sticky;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        display: block;
+        height: var(--activity-feed-fade-height);
+        margin-top: calc(-1 * var(--activity-feed-fade-height));
+        pointer-events: none;
+        background: linear-gradient(
+            to bottom,
+            rgba(12, 14, 41, 0) 0%,
+            rgba(12, 14, 41, 0.82) 58%,
+            #0c0e29 100%
+        );
     }}
     .activity-feed {{
         display: flex;
         flex-direction: column;
-        gap: 0.65rem;
-        margin: 0.35rem 0 0;
-        max-width: 52rem;
+        gap: var(--activity-feed-item-gap, 0.65rem);
     }}
     .activity-feed-item {{
-        display: flex;
+        display: grid;
+        grid-template-columns:
+            var(--activity-feed-name-width)
+            var(--activity-feed-rating-group-width)
+            var(--activity-feed-rank-group-width)
+            var(--activity-feed-time-width);
         align-items: center;
-        justify-content: space-between;
-        gap: 1rem;
+        column-gap: 0.65rem;
         padding: 0.85rem 1rem 0.85rem 0.95rem;
         border-radius: 0.65rem;
         border: 1px solid rgba(120, 190, 255, 0.16);
-        border-left: 3px solid rgba(33, 195, 84, 0.85);
+        border-left: 3px solid #00b482;
         background: linear-gradient(
             90deg,
-            rgba(33, 195, 84, 0.08) 0%,
+            rgba(0, 180, 130, 0.08) 0%,
             rgba(14, 24, 48, 0.55) 18%,
             rgba(10, 18, 36, 0.35) 100%
         );
         box-shadow: 0 1px 0 rgba(255, 255, 255, 0.04) inset;
     }}
-    .activity-feed-main {{
-        display: flex;
-        flex-wrap: wrap;
-        align-items: baseline;
-        gap: 0.35rem 0.75rem;
-        min-width: 0;
-    }}
     .activity-feed-player {{
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        min-width: 0;
         font-weight: 700;
         color: rgb(245, 245, 245);
         font-size: 1rem;
     }}
+    .activity-feed-rating-group,
+    .activity-feed-rank-group {{
+        display: flex;
+        align-items: baseline;
+        min-width: 0;
+        white-space: nowrap;
+    }}
+    .activity-feed-rank-group {{
+        gap: 0.25em;
+    }}
     .activity-feed-rating {{
+        flex: 0 0 6ch;
+        text-align: left;
+        font-variant-numeric: tabular-nums;
         color: rgba(245, 245, 245, 0.92);
         font-size: 0.975rem;
         font-weight: 600;
     }}
     .activity-feed-rating-delta {{
+        font-variant-numeric: tabular-nums;
         color: rgb(33, 195, 84);
         font-weight: 700;
     }}
     .activity-feed-rank {{
+        flex: 0 0 auto;
+        text-align: left;
+        font-variant-numeric: tabular-nums;
         color: rgba(245, 245, 245, 0.82);
         font-size: 0.925rem;
     }}
     .activity-feed-rank-delta {{
+        font-variant-numeric: tabular-nums;
         color: rgb(88, 214, 255);
         font-weight: 700;
     }}
+    .activity-feed-delta--empty {{
+        display: none;
+    }}
     .activity-feed-time {{
-        flex: 0 0 auto;
+        justify-self: end;
+        text-align: right;
+        width: 100%;
         color: rgba(245, 245, 245, 0.45);
         font-size: 0.8125rem;
         white-space: nowrap;
@@ -888,7 +967,7 @@ def _render_full_ex_selected_player(entry: object) -> None:
             <div class="submission-selected-player-detail">
                 Rank <strong>#{entry.rank}</strong>
                 · EX Rating <strong>{format_rating_display(entry.ex_rating)}</strong>
-                · Last updated <strong>{format_last_updated(entry.last_updated, include_time=True)}</strong>
+                · Last updated <strong>{format_last_updated(entry.last_updated)}</strong>
             </div>
         </div>
         """,
@@ -1093,16 +1172,10 @@ def _render_full_ex_leaderboard_table(rankings: list) -> None:
                 "Rank": entry.rank,
                 "Player": entry.player,
                 "EX Rating": format_rating_display(entry.ex_rating),
-                "Last Updated": parse_last_updated(entry.last_updated),
+                "Last Updated": format_last_updated(entry.last_updated),
             }
             for entry in rankings
         ],
-        column_config={
-            "Last Updated": st.column_config.DatetimeColumn(
-                format="MMMM D, YYYY h:mm A",
-                width=FULL_EX_LEADERBOARD_LAST_UPDATED_WIDTH_PX,
-            ),
-        },
         width="content",
         hide_index=True,
         height=table_height,
@@ -1185,7 +1258,7 @@ def render_full_ex_rating_leaderboard(
 def _format_activity_rating_delta(prev_rating: float, new_rating: float) -> str:
     delta = new_rating - prev_rating
     if delta <= 0:
-        return ""
+        return '<span class="activity-feed-rating-delta activity-feed-delta--empty"></span>'
     return f'<span class="activity-feed-rating-delta">(+{format_rating_display(delta)})</span>'
 
 
@@ -1195,7 +1268,7 @@ def _format_activity_rank_delta(prev_rank: int, new_rank: int) -> str:
         return f'<span class="activity-feed-rank-delta">(↑{delta})</span>'
     if delta < 0:
         return f'<span class="activity-feed-rank-delta">(↓{abs(delta)})</span>'
-    return ""
+    return '<span class="activity-feed-rank-delta activity-feed-delta--empty"></span>'
 
 
 def _render_activity_feed_item(entry: LeaderboardActivityEntry) -> str:
@@ -1204,14 +1277,17 @@ def _render_activity_feed_item(entry: LeaderboardActivityEntry) -> str:
     rating_delta = _format_activity_rating_delta(entry.prev_rating, entry.new_rating)
     rank_delta = _format_activity_rank_delta(entry.prev_rank, entry.new_rank)
     time_ago = html.escape(format_time_ago(entry.created_at))
-    rank_suffix = f" {rank_delta}" if rank_delta else ""
     return (
         '<div class="activity-feed-item">'
-        '<div class="activity-feed-main">'
-        f'<span class="activity-feed-player">{player}</span>'
-        f'<span class="activity-feed-rating">{rating} {rating_delta}</span>'
-        f'<span class="activity-feed-rank">Rank #{entry.new_rank}{rank_suffix}</span>'
-        "</div>"
+        f'<span class="activity-feed-player" title="{player}">{player}</span>'
+        f'<span class="activity-feed-rating-group">'
+        f'<span class="activity-feed-rating">{rating}</span>'
+        f"{rating_delta}"
+        "</span>"
+        f'<span class="activity-feed-rank-group">'
+        f'<span class="activity-feed-rank">Rank #{entry.new_rank}</span>'
+        f"{rank_delta}"
+        "</span>"
         f'<span class="activity-feed-time">{time_ago}</span>'
         "</div>"
     )
@@ -1232,7 +1308,7 @@ def render_leaderboard_activity_feed() -> None:
             return
 
         try:
-            activity = _load_leaderboard_activity_feed()
+            activity = _load_leaderboard_activity_feed(limit=LEADERBOARD_ACTIVITY_FEED_LIMIT)
         except Exception as error:
             st.warning(f"Could not load leaderboard activity: {error}")
             return
@@ -1245,8 +1321,14 @@ def render_leaderboard_activity_feed() -> None:
             return
 
         items_html = "".join(_render_activity_feed_item(entry) for entry in activity)
+        scrollable = len(activity) > LEADERBOARD_ACTIVITY_FEED_VISIBLE_COUNT
+        viewport_class = (
+            "activity-feed-viewport activity-feed-viewport--scrollable"
+            if scrollable
+            else "activity-feed-viewport"
+        )
         st.markdown(
-            f'<div class="activity-feed">{items_html}</div>',
+            f'<div class="{viewport_class}"><div class="activity-feed">{items_html}</div></div>',
             unsafe_allow_html=True,
         )
 

@@ -1,12 +1,12 @@
 from datetime import datetime, timezone
 
-from rating.baseline_leaderboard import UpdatedRating
-from rating.constants import DEFAULT_MAX_SCORES_PATH, EX_RATING_BASELINE_PATH, SCORE_SOURCE_SUBMISSION
+from rating.constants import DEFAULT_MAX_SCORES_PATH, SCORE_SOURCE_SUBMISSION
 from rating.data import load_critical_max_scores
 from rating.entries import chart_key, critical_count, is_classic_entry, miss_count, split_chart_key
 from rating.formatting import format_rating_display
 from rating.imported_players import resolve_max_score_chart_key
-from rating.leaderboard_activity import compute_player_rank, record_leaderboard_activity
+from rating.leaderboard_activity import record_leaderboard_activity
+from rating.public_leaderboard import player_rank_on_leaderboard
 from rating.supabase_config import supabase_configured
 from rating.supabase_leaderboard import load_updated_ratings_from_supabase, submit_player_update_to_supabase
 
@@ -89,8 +89,9 @@ def submit_full_ex_rating_update(
 
         if prev_rating is not None and prev_rank is not None:
             overrides = load_updated_ratings_from_supabase()
-            overrides[player_id] = UpdatedRating(ex_rating=ex_rating, last_updated=timestamp)
-            new_rank = compute_player_rank(
+            stored_rating = overrides.get(player_id)
+            ranked_rating = stored_rating.ex_rating if stored_rating is not None else ex_rating
+            new_rank = player_rank_on_leaderboard(
                 player_id,
                 rating_overrides=overrides,
             )
@@ -98,7 +99,7 @@ def submit_full_ex_rating_update(
                 record_leaderboard_activity(
                     player_id=player_id,
                     prev_rating=prev_rating,
-                    new_rating=ex_rating,
+                    new_rating=ranked_rating,
                     prev_rank=prev_rank,
                     new_rank=new_rank,
                     created_at=timestamp,

@@ -50,6 +50,29 @@ def rank_leaderboard_entries(
     ]
 
 
+def player_rank_on_leaderboard(
+    player_id: str,
+    *,
+    rating_overrides: dict[str, UpdatedRating] | None = None,
+    baseline_path=EX_RATING_BASELINE_PATH,
+) -> int | None:
+    """Return a player's competition rank using the same merge/rank pipeline as the UI."""
+    baseline = load_baseline_leaderboard_csv(baseline_path)
+    if not baseline:
+        return None
+
+    overrides = rating_overrides
+    if overrides is None:
+        overrides = load_updated_ratings_from_supabase() if supabase_configured() else {}
+
+    merged = merge_baseline_with_updated_ratings(baseline, overrides)
+    ranked = rank_leaderboard_entries(merged)
+    for entry in ranked:
+        if entry.player_id == player_id:
+            return entry.rank
+    return None
+
+
 SUPABASE_LOAD_ERROR_MESSAGE = (
     "Error: Failed to load latest ratings. Leaderboard may not be up to date."
 )
