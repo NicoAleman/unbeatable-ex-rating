@@ -62,27 +62,41 @@ load_player_ratings_from_supabase = supabase_leaderboard_module.load_player_rati
 _DATE_FORMATS = ("%Y-%m-%d", "%m/%d/%Y", "%m/%d/%y", "%B %d, %Y", "%b %d, %Y")
 
 
-def format_last_updated(value: object) -> str:
+def _local_timezone():
+    return datetime.now().astimezone().tzinfo
+
+
+def parse_last_updated(value: object) -> datetime | None:
     if value is None:
-        return "—"
+        return None
     text = str(value).strip()
     if not text:
-        return "—"
+        return None
     try:
         dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
         if dt.tzinfo is not None:
-            dt = dt.astimezone()
-        elif dt.hour or dt.minute or dt.second or dt.microsecond:
-            dt = dt.replace(tzinfo=timezone.utc).astimezone()
-        return dt.strftime("%B %d, %Y")
+            return dt.astimezone()
+        if dt.hour or dt.minute or dt.second or dt.microsecond:
+            return dt.replace(tzinfo=timezone.utc).astimezone()
+        return dt.replace(tzinfo=_local_timezone())
     except ValueError:
         pass
     for fmt in _DATE_FORMATS:
         try:
-            return datetime.strptime(text, fmt).strftime("%B %d, %Y")
+            return datetime.strptime(text, fmt).replace(tzinfo=_local_timezone())
         except ValueError:
             continue
-    return text
+    return None
+
+
+def format_last_updated(value: object, *, include_time: bool = False) -> str:
+    dt = parse_last_updated(value)
+    if dt is None:
+        text = str(value).strip() if value is not None else ""
+        return text if text else "—"
+    if include_time:
+        return dt.strftime("%B %d, %Y %I:%M %p")
+    return dt.strftime("%B %d, %Y")
 
 
 st.set_page_config(
@@ -99,6 +113,8 @@ SIDE_BY_SIDE_MIN_VIEWPORT_PX = 1900
 LEADERBOARD_SIDE_BY_SIDE_MIN_PX = 1000
 # Max width for the submission panel when shown beside the leaderboard.
 SUBMIT_EX_RATING_PANEL_MAX_WIDTH_PX = 540
+# Last Updated column width (fits "June 26, 2026 5:00 PM").
+FULL_EX_LEADERBOARD_LAST_UPDATED_WIDTH_PX = 160
 # Each board width at the side-by-side breakpoint (~1rem page inset per side, 1rem gap).
 BOARD_MAX_WIDTH_PX = (SIDE_BY_SIDE_MIN_VIEWPORT_PX - 64 - 16) // 2
 # Upload, search, picker, and radio in the board viewer (~240px auto × 1.5).
@@ -467,7 +483,7 @@ def board_header(
     )
 
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=300, show_spinner="Loading...")
 def _load_players_with_scores() -> list[dict[str, object]] | None:
     try:
         players = load_players_with_scores_from_supabase()
@@ -488,7 +504,7 @@ def _load_players_with_scores() -> list[dict[str, object]] | None:
         return None
 
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=300, show_spinner="Loading...")
 def _load_player_board_data(player_id: str) -> tuple[list[ChartRating], bool]:
     return load_player_ratings_from_supabase(player_id)
 
@@ -772,7 +788,7 @@ def _render_full_ex_selected_player(entry: object) -> None:
             <div class="submission-selected-player-detail">
                 Rank <strong>#{entry.rank}</strong>
                 · EX Rating <strong>{format_rating_display(entry.ex_rating)}</strong>
-                · Last updated <strong>{format_last_updated(entry.last_updated)}</strong>
+                · Last updated <strong>{format_last_updated(entry.last_updated, include_time=True)}</strong>
             </div>
         </div>
         """,
@@ -972,17 +988,23 @@ def _render_full_ex_leaderboard_table(rankings: list) -> None:
                 "Rank": entry.rank,
                 "Player": entry.player,
                 "EX Rating": format_rating_display(entry.ex_rating),
-                "Last Updated": format_last_updated(entry.last_updated),
+                "Last Updated": parse_last_updated(entry.last_updated),
             }
             for entry in rankings
         ],
+        column_config={
+            "Last Updated": st.column_config.DatetimeColumn(
+                format="MMMM D, YYYY h:mm A",
+                width=FULL_EX_LEADERBOARD_LAST_UPDATED_WIDTH_PX,
+            ),
+        },
         width="content",
         hide_index=True,
         height=table_height,
     )
 
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=300, show_spinner="Loading...")
 def _load_ranked_ex_leaderboard():
     return load_ex_leaderboard_with_warning()
 
@@ -1227,10 +1249,9 @@ with st.container(key="board-viewer-section", width="content"):
                 )
 
                 if selected_player is not None:
-                    with st.spinner("Loading player scores…"):
-                        ratings, has_accuracy = _load_player_board_data(
-                            str(selected_player["player_id"])
-                        )
+                    ratings, has_accuracy = _load_player_board_data(
+                        str(selected_player["player_id"])
+                    )
 
                     if not ratings:
                         st.warning("No rated charts found for that player.")
