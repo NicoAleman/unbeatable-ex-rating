@@ -148,6 +148,8 @@ ACTIVITY_FEED_NAME_WIDTH_CH = 18  # names longer than this truncate with …
 ACTIVITY_FEED_RATING_GROUP_WIDTH_CH = 14  # keeps rating values and timestamps aligned
 ACTIVITY_FEED_RANK_GROUP_WIDTH_CH = 14  # fits "Rank #999 (↑99)"; keeps timestamps aligned
 ACTIVITY_FEED_TIME_WIDTH_CH = 10  # fits "59 minutes ago"
+# Potential gains sliders switch from side-by-side to stacked below this width.
+POTENTIAL_GAINS_SLIDERS_STACK_MAX_PX = 544
 # Each board width at the side-by-side breakpoint (~1rem page inset per side, 1rem gap).
 BOARD_MAX_WIDTH_PX = (SIDE_BY_SIDE_MIN_VIEWPORT_PX - 64 - 16) // 2
 # Upload, search, picker, and radio in the board viewer (~240px auto × 1.5).
@@ -355,40 +357,128 @@ st.markdown(
         width: fit-content !important;
         max-width: 100% !important;
     }}
-    [data-testid="stMarkdownContainer"]:has(.potential-gains-slider-divider) {{
+    .st-key-ex-potential-gains-sliders [data-testid="stHorizontalBlock"],
+    .st-key-std-potential-gains-sliders [data-testid="stHorizontalBlock"] {{
+        container-type: inline-size;
+        container-name: potential-gains-sliders-row;
+    }}
+    [data-testid="stMarkdownContainer"]:has(.potential-gains-slider-divider-wrap) {{
         display: flex !important;
         align-items: stretch !important;
         height: 100% !important;
+        width: 100% !important;
         margin: 0 !important;
         padding: 0 !important;
     }}
-    .potential-gains-slider-divider {{
+    .potential-gains-slider-divider-wrap {{
+        display: flex;
+        align-items: stretch;
+        justify-content: center;
+        width: 100%;
+        height: 100%;
+        min-height: 4.5rem;
+    }}
+    .potential-gains-slider-divider--vertical {{
+        border-top: none;
         border-left: 1px solid rgba(250, 250, 250, 0.2);
         height: 100%;
         min-height: 4.5rem;
-        margin: 0 auto;
         width: 0;
+    }}
+    .potential-gains-slider-divider--horizontal {{
+        display: none;
+        border-left: none;
+        border-top: 1px solid rgba(250, 250, 250, 0.2);
+        width: 100%;
+        height: 0;
+        margin: 0.65rem 0;
+    }}
+    @container potential-gains-sliders-row (max-width: {POTENTIAL_GAINS_SLIDERS_STACK_MAX_PX}px) {{
+        .st-key-ex-potential-gains-sliders [data-testid="column"]:has(.potential-gains-slider-divider-wrap),
+        .st-key-std-potential-gains-sliders [data-testid="column"]:has(.potential-gains-slider-divider-wrap) {{
+            flex: 1 1 100% !important;
+            width: 100% !important;
+            max-width: 100% !important;
+        }}
+        .potential-gains-slider-divider-wrap {{
+            min-height: 0;
+            height: auto;
+        }}
+        .potential-gains-slider-divider--vertical {{
+            display: none;
+        }}
+        .potential-gains-slider-divider--horizontal {{
+            display: block;
+        }}
+        [data-testid="stMarkdownContainer"]:has(.potential-gains-slider-divider-wrap) {{
+            height: auto !important;
+        }}
+    }}
+    @media (max-width: {POTENTIAL_GAINS_SLIDERS_STACK_MAX_PX}px) {{
+        .st-key-ex-potential-gains-sliders [data-testid="column"]:has(.potential-gains-slider-divider-wrap),
+        .st-key-std-potential-gains-sliders [data-testid="column"]:has(.potential-gains-slider-divider-wrap) {{
+            flex: 1 1 100% !important;
+            width: 100% !important;
+            max-width: 100% !important;
+        }}
+        .potential-gains-slider-divider-wrap {{
+            min-height: 0;
+            height: auto;
+        }}
+        .potential-gains-slider-divider--vertical {{
+            display: none;
+        }}
+        .potential-gains-slider-divider--horizontal {{
+            display: block;
+        }}
+        [data-testid="stMarkdownContainer"]:has(.potential-gains-slider-divider-wrap) {{
+            height: auto !important;
+        }}
     }}
     .st-key-leaderboard-activity-feed {{
         width: fit-content !important;
         max-width: 100% !important;
+        overflow-x: auto;
+        overflow-y: visible;
+        scrollbar-color: rgba(245, 245, 245, 0.28) transparent;
+        scrollbar-width: thin;
+    }}
+    .st-key-leaderboard-activity-feed::-webkit-scrollbar {{
+        height: 0.45rem;
+    }}
+    .st-key-leaderboard-activity-feed::-webkit-scrollbar-thumb {{
+        background: rgba(245, 245, 245, 0.28);
+        border-radius: 999px;
     }}
     .st-key-leaderboard-activity-feed [data-testid="stMarkdownContainer"]:has(.activity-feed-viewport) {{
         margin: 0 !important;
         padding: 0 !important;
+        max-width: none;
+        overflow: visible;
     }}
     .activity-feed-viewport {{
         --activity-feed-item-height: 3.35rem;
         --activity-feed-item-gap: 0.65rem;
+        --activity-feed-column-gap: 0.65rem;
+        --activity-feed-item-padding-x: 1.95rem;
         --activity-feed-visible-items: {LEADERBOARD_ACTIVITY_FEED_VISIBLE_COUNT};
         --activity-feed-fade-height: 2.75rem;
         --activity-feed-name-width: {ACTIVITY_FEED_NAME_WIDTH_CH}ch;
         --activity-feed-rating-group-width: {ACTIVITY_FEED_RATING_GROUP_WIDTH_CH}ch;
         --activity-feed-rank-group-width: {ACTIVITY_FEED_RANK_GROUP_WIDTH_CH}ch;
         --activity-feed-time-width: {ACTIVITY_FEED_TIME_WIDTH_CH}ch;
+        --activity-feed-min-width: calc(
+            var(--activity-feed-name-width)
+            + var(--activity-feed-rating-group-width)
+            + var(--activity-feed-rank-group-width)
+            + var(--activity-feed-time-width)
+            + 3 * var(--activity-feed-column-gap)
+            + var(--activity-feed-item-padding-x)
+        );
         margin: 0.35rem 0 0;
-        width: fit-content;
-        max-width: 100%;
+        min-width: var(--activity-feed-min-width);
+        width: max-content;
+        max-width: none;
         position: relative;
     }}
     .activity-feed-viewport--scrollable {{
@@ -396,7 +486,7 @@ st.markdown(
             var(--activity-feed-visible-items) * var(--activity-feed-item-height)
             + (var(--activity-feed-visible-items) - 1) * var(--activity-feed-item-gap)
         );
-        overflow-x: hidden;
+        overflow-x: visible;
         overflow-y: auto;
         padding-right: 0.35rem;
         scrollbar-color: rgba(245, 245, 245, 0.28) transparent;
@@ -433,6 +523,8 @@ st.markdown(
         display: flex;
         flex-direction: column;
         gap: var(--activity-feed-item-gap, 0.65rem);
+        min-width: var(--activity-feed-min-width);
+        width: max-content;
     }}
     .activity-feed-item {{
         display: grid;
@@ -442,7 +534,10 @@ st.markdown(
             var(--activity-feed-rank-group-width)
             var(--activity-feed-time-width);
         align-items: center;
-        column-gap: 0.65rem;
+        column-gap: var(--activity-feed-column-gap);
+        min-width: var(--activity-feed-min-width);
+        width: max-content;
+        box-sizing: border-box;
         padding: 0.85rem 1rem 0.85rem 0.95rem;
         border-radius: 0.65rem;
         border: 1px solid rgba(120, 190, 255, 0.16);
@@ -468,7 +563,7 @@ st.markdown(
     .activity-feed-rank-group {{
         display: flex;
         align-items: baseline;
-        min-width: 0;
+        min-width: max-content;
         white-space: nowrap;
     }}
     .activity-feed-rank-group {{
@@ -572,30 +667,34 @@ def _render_potential_gains_expander(
     target_accuracy_label: str = "Target Accuracy",
 ) -> None:
     with st.expander(expander_label, expanded=False):
-        level_cap_col, divider_col, target_accuracy_col = st.columns(
-            [1, 0.04, 1],
-            vertical_alignment="center",
-        )
-        with level_cap_col:
-            level_cap = st.select_slider(
-                "Level Cap",
-                options=list(range(10, 26)),
-                value=25,
-                key=f"{key}-level-cap",
+        with st.container(key=f"{key}-sliders"):
+            level_cap_col, divider_col, target_accuracy_col = st.columns(
+                [1, 0.04, 1],
+                vertical_alignment="center",
             )
-        with divider_col:
-            st.markdown(
-                '<div class="potential-gains-slider-divider"></div>',
-                unsafe_allow_html=True,
-            )
-        with target_accuracy_col:
-            target_accuracy = st.select_slider(
-                target_accuracy_label,
-                options=_target_accuracy_options(),
-                value=100.0,
-                format_func=_format_target_accuracy,
-                key=f"{key}-target-accuracy",
-            )
+            with level_cap_col:
+                level_cap = st.select_slider(
+                    "Level Cap",
+                    options=list(range(10, 26)),
+                    value=25,
+                    key=f"{key}-level-cap",
+                )
+            with divider_col:
+                st.markdown(
+                    '<div class="potential-gains-slider-divider-wrap">'
+                    '<div class="potential-gains-slider-divider--vertical"></div>'
+                    '<div class="potential-gains-slider-divider--horizontal"></div>'
+                    "</div>",
+                    unsafe_allow_html=True,
+                )
+            with target_accuracy_col:
+                target_accuracy = st.select_slider(
+                    target_accuracy_label,
+                    options=_target_accuracy_options(),
+                    value=100.0,
+                    format_func=_format_target_accuracy,
+                    key=f"{key}-target-accuracy",
+                )
         gains = potential_gains_from_perfect(
             ratings,
             rating_attr,
