@@ -58,7 +58,6 @@ EX_RATING_BASELINE_PATH = constants_module.EX_RATING_BASELINE_PATH
 EX_RATING_LEADERBOARD_DB_PATH = constants_module.EX_RATING_LEADERBOARD_DB_PATH
 FULL_EX_RATING_LEADERBOARD_PATH = constants_module.FULL_EX_RATING_LEADERBOARD_PATH
 TOP_N = constants_module.TOP_N
-format_potential_gain_display = formatting_module.format_potential_gain_display
 format_rating_display = formatting_module.format_rating_display
 format_song_display_name = formatting_module.format_song_display_name
 potential_gains_from_perfect = board_module.potential_gains_from_perfect
@@ -821,6 +820,14 @@ def _format_target_accuracy(value: float) -> str:
     return f"{text}%"
 
 
+def _rating_number_format(*, show_sign: bool = False) -> str:
+    sign = "+" if show_sign else ""
+    return f"%{sign}.{constants_module.DISPLAY_RATING_DECIMALS}f"
+
+
+ACCURACY_COLUMN_CONFIG = st.column_config.NumberColumn(format="%.2f")
+
+
 def _render_potential_gains_expander(
     ratings: list[ChartRating],
     rating_attr: str,
@@ -883,11 +890,11 @@ def _render_potential_gains_expander(
                     "Difficulty": entry.chart.difficulty,
                     "Level": entry.chart.level,
                     accuracy_column_label: (
-                        f"{entry.chart.ex_accuracy:.2f}"
+                        entry.chart.ex_accuracy
                         if rating_attr == "ex_rating"
-                        else f"{entry.chart.standard_accuracy:.2f}"
+                        else entry.chart.standard_accuracy
                     ),
-                    potential_column_label: format_potential_gain_display(entry.potential_gain),
+                    potential_column_label: entry.potential_gain,
                 }
                 for rank, entry in zip(ranks, gains, strict=True)
             ],
@@ -895,6 +902,12 @@ def _render_potential_gains_expander(
             hide_index=True,
             height=min((len(gains) + 1) * TABLE_ROW_HEIGHT, LEADERBOARD_TABLE_HEIGHT),
             key=key,
+            column_config={
+                accuracy_column_label: ACCURACY_COLUMN_CONFIG,
+                potential_column_label: st.column_config.NumberColumn(
+                    format=_rating_number_format(show_sign=True)
+                ),
+            },
         )
 
 
@@ -992,14 +1005,14 @@ def _ex_board_table_row(
         "Level": chart.level,
     }
     if include_accuracy:
-        row["Accuracy"] = f"{chart.standard_accuracy:.2f}"
+        row["Accuracy"] = chart.standard_accuracy
     row.update(
         {
             "Score": chart.score,
             "Max Score": chart.max_score,
-            "EX Accuracy": f"{chart.ex_accuracy:.2f}",
+            "EX Accuracy": chart.ex_accuracy,
             "EX Grade": chart.ex_grade,
-            "EX Rating": format_rating_display(chart.ex_rating),
+            "EX Rating": chart.ex_rating,
         }
     )
     return row
@@ -1056,6 +1069,17 @@ def _render_rating_boards(
                     use_container_width=True,
                     hide_index=True,
                     height=TABLE_HEIGHT,
+                    column_config={
+                        **(
+                            {"Accuracy": ACCURACY_COLUMN_CONFIG}
+                            if include_accuracy
+                            else {}
+                        ),
+                        "EX Accuracy": ACCURACY_COLUMN_CONFIG,
+                        "EX Rating": st.column_config.NumberColumn(
+                            format=_rating_number_format()
+                        ),
+                    },
                 )
                 _render_potential_gains_expander(
                     ratings,
@@ -1079,15 +1103,21 @@ def _render_rating_boards(
                             "Chart": format_song_display_name(chart.song),
                             "Difficulty": chart.difficulty,
                             "Level": chart.level,
-                            "Accuracy": f"{chart.standard_accuracy:.2f}",
+                            "Accuracy": chart.standard_accuracy,
                             "Grade": chart.standard_grade,
-                            "Rating": format_rating_display(chart.standard_rating),
+                            "Rating": chart.standard_rating,
                         }
                         for rank, chart in enumerate(standard_top, 1)
                     ],
                     use_container_width=True,
                     hide_index=True,
                     height=TABLE_HEIGHT,
+                    column_config={
+                        "Accuracy": ACCURACY_COLUMN_CONFIG,
+                        "Rating": st.column_config.NumberColumn(
+                            format=_rating_number_format()
+                        ),
+                    },
                 )
                 _render_potential_gains_expander(
                     ratings,
@@ -1442,7 +1472,7 @@ def _render_full_ex_leaderboard_table(rankings: list) -> None:
             {
                 "Rank": entry.rank,
                 "Player": entry.player,
-                "EX Rating": format_rating_display(entry.ex_rating),
+                "EX Rating": entry.ex_rating,
                 "Last Updated": format_last_updated(entry.last_updated),
             }
             for entry in rankings
@@ -1450,6 +1480,11 @@ def _render_full_ex_leaderboard_table(rankings: list) -> None:
         width="content",
         hide_index=True,
         height=table_height,
+        column_config={
+            "EX Rating": st.column_config.NumberColumn(
+                format=_rating_number_format()
+            ),
+        },
     )
 
 
