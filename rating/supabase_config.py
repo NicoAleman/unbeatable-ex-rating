@@ -13,9 +13,10 @@ def get_supabase_db_url() -> str | None:
     except Exception:
         pass
 
-    url = os.environ.get("SUPABASE_DB_URL")
-    if url and "YOUR_" not in url:
-        return url.strip()
+    for env_name in ("DATABASE_URL", "SUPABASE_DB_URL"):
+        url = os.environ.get(env_name)
+        if url and "YOUR_" not in url:
+            return url.strip()
     return None
 
 
