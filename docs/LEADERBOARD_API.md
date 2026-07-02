@@ -75,6 +75,9 @@ Append-only feed of rating increases.
 | `prev_rank` | `INTEGER` | Competition rank before |
 | `new_rank` | `INTEGER` | Competition rank after |
 | `created_at` | `TIMESTAMPTZ` | Defaults to `NOW()` |
+| `submission_source` | `TEXT` | `'mod'` or `'site'`; `NULL` for backfilled rows. **Admin/audit only** — not shown on the public site |
+
+Allowed values: `mod` (game mod → Render API), `site` (Streamlit upload). Historical/backfilled entries leave this `NULL`.
 
 ---
 
@@ -96,7 +99,7 @@ The site loads baseline from CSV and overlays `updated_ratings` in application c
 ### Activity feed
 
 ```sql
-SELECT player_id, prev_rating, new_rating, prev_rank, new_rank, created_at
+SELECT player_id, prev_rating, new_rating, prev_rank, new_rank, created_at, submission_source
 FROM leaderboard_activity
 ORDER BY created_at DESC
 LIMIT 20;
@@ -194,11 +197,11 @@ Rows with `source = 'seed'` from the initial bulk import are left untouched unle
 
 ```sql
 INSERT INTO leaderboard_activity (
-    player_id, prev_rating, new_rating, prev_rank, new_rank, created_at
-) VALUES ($1, $2, $3, $4, $5, $6);
+    player_id, prev_rating, new_rating, prev_rank, new_rank, created_at, submission_source
+) VALUES ($1, $2, $3, $4, $5, $6, $7);
 ```
 
-Only write a feed entry when the new rating is genuinely higher than the previous effective rating.
+Only write a feed entry when EX rating increased. Set `submission_source` to `'mod'` (Render API) or `'site'` (Streamlit upload).
 
 ---
 
@@ -462,3 +465,4 @@ Schema source of truth: `supabase/migrations/`
 - `20260629180000_hybrid_leaderboard.sql` — `updated_ratings`, `scores`
 - `20260630120000_scores_accuracy.sql` — accuracy metadata columns
 - `20260701120000_leaderboard_activity.sql` — activity feed
+- `20260702120000_leaderboard_activity_submission_source.sql` — activity feed source column

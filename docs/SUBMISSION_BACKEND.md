@@ -161,7 +161,7 @@ On success, one Postgres transaction:
 
 1. Upsert `updated_ratings`
 2. Replace `submission` rows in `scores`
-3. Insert `leaderboard_activity` when rating increased
+3. Insert `leaderboard_activity` when EX rating increased, with `submission_source` (`mod` or `site`)
 
 ---
 

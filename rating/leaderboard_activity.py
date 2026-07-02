@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 import psycopg2.errors
 
 from rating.baseline_leaderboard import load_baseline_leaderboard_csv
-from rating.constants import EX_RATING_BASELINE_PATH
+from rating.constants import EX_RATING_BASELINE_PATH, SUBMISSION_SOURCES
 from rating.supabase_config import supabase_configured
 from rating.supabase_leaderboard import _connect_postgres, _format_timestamp
 
@@ -18,6 +18,15 @@ class LeaderboardActivityEntry:
     prev_rank: int
     new_rank: int
     created_at: datetime
+    submission_source: str | None = None
+
+
+def format_submission_source_label(submission_source: str | None) -> str | None:
+    if submission_source == "mod":
+        return "Mod"
+    if submission_source == "site":
+        return "Site"
+    return None
 
 
 def record_leaderboard_activity(
@@ -28,8 +37,12 @@ def record_leaderboard_activity(
     prev_rank: int,
     new_rank: int,
     created_at: str | None = None,
+    submission_source: str | None = None,
     db_url: str | None = None,
 ) -> None:
+    if submission_source is not None and submission_source not in SUBMISSION_SOURCES:
+        raise ValueError(f"Invalid submission_source: {submission_source!r}")
+
     timestamp = created_at or datetime.now(timezone.utc).isoformat()
     conn = _connect_postgres(db_url)
     try:
@@ -38,9 +51,10 @@ def record_leaderboard_activity(
                 cur.execute(
                     """
                     INSERT INTO leaderboard_activity (
-                        player_id, prev_rating, new_rating, prev_rank, new_rank, created_at
+                        player_id, prev_rating, new_rating, prev_rank, new_rank,
+                        created_at, submission_source
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         player_id,
@@ -49,6 +63,7 @@ def record_leaderboard_activity(
                         int(prev_rank),
                         int(new_rank),
                         timestamp,
+                        submission_source,
                     ),
                 )
     finally:
@@ -72,16 +87,30 @@ def load_leaderboard_activity(
     conn = _connect_postgres(db_url)
     try:
         with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT player_id, prev_rating, new_rating, prev_rank, new_rank, created_at
-                FROM leaderboard_activity
-                ORDER BY created_at DESC
-                LIMIT %s
-                """,
-                (limit,),
-            )
-            rows = cur.fetchall()
+            try:
+                cur.execute(
+                    """
+                    SELECT player_id, prev_rating, new_rating, prev_rank, new_rank,
+                           created_at, submission_source
+                    FROM leaderboard_activity
+                    ORDER BY created_at DESC
+                    LIMIT %s
+                    """,
+                    (limit,),
+                )
+                rows = cur.fetchall()
+            except psycopg2.errors.UndefinedColumn:
+                conn.rollback()
+                cur.execute(
+                    """
+                    SELECT player_id, prev_rating, new_rating, prev_rank, new_rank, created_at
+                    FROM leaderboard_activity
+                    ORDER BY created_at DESC
+                    LIMIT %s
+                    """,
+                    (limit,),
+                )
+                rows = [(*row, None) for row in cur.fetchall()]
     except psycopg2.errors.UndefinedTable:
         return []
     finally:
@@ -96,6 +125,7 @@ def load_leaderboard_activity(
             created_at = datetime.fromisoformat(_format_timestamp(created_raw).replace("Z", "+00:00"))
 
         player_id = str(row[0])
+        submission_source = str(row[6]) if row[6] is not None else None
         entries.append(
             LeaderboardActivityEntry(
                 player_id=player_id,
@@ -105,6 +135,7 @@ def load_leaderboard_activity(
                 prev_rank=int(row[3]),
                 new_rank=int(row[4]),
                 created_at=created_at,
+                submission_source=submission_source,
             )
         )
     return entries
@@ -141,6 +172,7 @@ def combine_consecutive_activity_entries(
                     prev_rank=oldest.prev_rank,
                     new_rank=newest.new_rank,
                     created_at=newest.created_at,
+                    submission_source=newest.submission_source,
                 )
             )
 

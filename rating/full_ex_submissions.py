@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from rating.constants import DEFAULT_MAX_SCORES_PATH
+from rating.constants import DEFAULT_MAX_SCORES_PATH, SUBMISSION_SOURCE_SITE
 from rating.data import load_critical_max_scores
 from rating.entries import chart_key, critical_count, is_classic_entry, miss_count, split_chart_key
 from rating.formatting import format_rating_display
@@ -88,7 +88,12 @@ def submit_full_ex_rating_update(
         return False, "No rated Classic charts found in that file."
 
     timestamp = last_updated or datetime.now(timezone.utc).isoformat()
-    result = process_player_submission(player_id, scores, last_updated=timestamp)
+    result = process_player_submission(
+        player_id,
+        scores,
+        last_updated=timestamp,
+        submission_source=SUBMISSION_SOURCE_SITE,
+    )
     if not result.success:
         return False, result.error or "Submission rejected."
 

@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from rating.baseline_leaderboard import UpdatedRating, load_baseline_leaderboard_csv
 from rating.board import player_ex_rating_with_completion, player_standard_rating_with_completion
 from rating.chart_levels import load_chart_rating_levels, resolve_chart_rating_level
-from rating.constants import DEFAULT_MAX_SCORES_PATH, SCORE_SOURCE_SUBMISSION
+from rating.constants import DEFAULT_MAX_SCORES_PATH, SCORE_SOURCE_SUBMISSION, SUBMISSION_SOURCE_MOD
 from rating.data import load_critical_max_scores
 from rating.formatting import format_rating_display
 from rating.imported_players import (
@@ -264,6 +264,7 @@ def _write_submission_transaction(
     prev_rank: int,
     new_rank: int,
     record_activity: bool,
+    submission_source: str | None = None,
     db_url: str | None = None,
 ) -> None:
     postgres = _connect_postgres(db_url)
@@ -325,9 +326,10 @@ def _write_submission_transaction(
                     cur.execute(
                         """
                         INSERT INTO leaderboard_activity (
-                            player_id, prev_rating, new_rating, prev_rank, new_rank, created_at
+                            player_id, prev_rating, new_rating, prev_rank, new_rank,
+                            created_at, submission_source
                         )
-                        VALUES (%s, %s, %s, %s, %s, %s)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s)
                         """,
                         (
                             player_id,
@@ -336,6 +338,7 @@ def _write_submission_transaction(
                             int(prev_rank),
                             int(new_rank),
                             last_updated,
+                            submission_source,
                         ),
                     )
         postgres.commit()
@@ -347,6 +350,8 @@ def process_player_submission(
     player_id: str,
     scores: list[dict[str, object]],
     last_updated: str | None = None,
+    *,
+    submission_source: str | None = None,
 ) -> SubmissionResult:
     if not get_supabase_db_url():
         return SubmissionResult(success=False, error="Database is not configured.")
@@ -412,6 +417,7 @@ def process_player_submission(
             prev_rank=prev_rank,
             new_rank=new_rank,
             record_activity=improvement.ex_rating_improved,
+            submission_source=submission_source,
         )
     except Exception as error:
         return SubmissionResult(success=False, error=f"Could not save submission: {error}")
@@ -443,4 +449,9 @@ def process_mod_submission(payload: dict[str, object]) -> SubmissionResult:
         if isinstance(last_updated_raw, str) and last_updated_raw.strip()
         else None
     )
-    return process_player_submission(player_id, scores, last_updated=last_updated)
+    return process_player_submission(
+        player_id,
+        scores,
+        last_updated=last_updated,
+        submission_source=SUBMISSION_SOURCE_MOD,
+    )
