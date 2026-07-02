@@ -108,3 +108,42 @@ def load_leaderboard_activity(
             )
         )
     return entries
+
+
+def combine_consecutive_activity_entries(
+    entries: list[LeaderboardActivityEntry],
+) -> list[LeaderboardActivityEntry]:
+    """Merge consecutive same-player rows (newest-first) into one displayed update."""
+    if not entries:
+        return []
+
+    combined: list[LeaderboardActivityEntry] = []
+    index = 0
+    while index < len(entries):
+        streak_end = index
+        player_id = entries[index].player_id
+
+        while streak_end + 1 < len(entries) and entries[streak_end + 1].player_id == player_id:
+            streak_end += 1
+
+        newest = entries[index]
+        oldest = entries[streak_end]
+
+        if index == streak_end:
+            combined.append(newest)
+        else:
+            combined.append(
+                LeaderboardActivityEntry(
+                    player_id=newest.player_id,
+                    display_name=newest.display_name,
+                    prev_rating=oldest.prev_rating,
+                    new_rating=newest.new_rating,
+                    prev_rank=oldest.prev_rank,
+                    new_rank=newest.new_rank,
+                    created_at=newest.created_at,
+                )
+            )
+
+        index = streak_end + 1
+
+    return combined

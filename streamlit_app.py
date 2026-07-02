@@ -72,6 +72,7 @@ SUPABASE_LOAD_ERROR_MESSAGE = public_leaderboard_module.SUPABASE_LOAD_ERROR_MESS
 validate_full_ex_rating_submission = full_ex_submissions_module.validate_full_ex_rating_submission
 submit_full_ex_rating_update = full_ex_submissions_module.submit_full_ex_rating_update
 load_leaderboard_activity = leaderboard_activity_module.load_leaderboard_activity
+combine_consecutive_activity_entries = leaderboard_activity_module.combine_consecutive_activity_entries
 LeaderboardActivityEntry = leaderboard_activity_module.LeaderboardActivityEntry
 load_players_with_scores_from_supabase = supabase_leaderboard_module.load_players_with_scores_from_supabase
 load_player_ratings_from_supabase = supabase_leaderboard_module.load_player_ratings_from_supabase
@@ -1601,7 +1602,7 @@ def _render_activity_feed_item(entry: LeaderboardActivityEntry) -> str:
 
 @st.cache_data(ttl=60, show_spinner="Loading...")
 def _load_leaderboard_activity_feed(limit: int = LEADERBOARD_ACTIVITY_FEED_LIMIT):
-    return load_leaderboard_activity(limit=limit)
+    return combine_consecutive_activity_entries(load_leaderboard_activity(limit=limit))
 
 
 def render_leaderboard_activity_feed() -> None:
