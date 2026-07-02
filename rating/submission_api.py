@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from rating.baseline_leaderboard import UpdatedRating, load_baseline_leaderboard_csv
-from rating.board import player_ex_rating_with_completion
+from rating.board import player_ex_rating_with_completion, player_standard_rating_with_completion
 from rating.chart_levels import load_chart_rating_levels, resolve_chart_rating_level
 from rating.constants import DEFAULT_MAX_SCORES_PATH, SCORE_SOURCE_SUBMISSION
 from rating.data import load_critical_max_scores
@@ -12,10 +12,16 @@ from rating.formatting import format_rating_display
 from rating.imported_players import (
     build_ratings_from_stored_scores,
     resolve_max_score_chart_key,
+    stored_scores_have_accuracy,
 )
 from rating.public_leaderboard import merge_baseline_with_updated_ratings, rank_leaderboard_entries
 from rating.supabase_config import get_supabase_db_url
-from rating.supabase_leaderboard import _batched, _connect_postgres, load_updated_ratings_from_supabase
+from rating.supabase_leaderboard import (
+    _batched,
+    _connect_postgres,
+    load_player_scores_from_supabase,
+    load_updated_ratings_from_supabase,
+)
 
 import psycopg2.extras
 
@@ -29,6 +35,20 @@ class SubmissionResult:
     error: str | None = None
     new_rank: int | None = None
     ex_rating: float | None = None
+
+
+@dataclass(frozen=True)
+class SubmissionImprovement:
+    computed_ex_rating: float
+    computed_standard_rating: float
+    prev_standard_rating: float
+    ex_rating_improved: bool
+    standard_rating_improved: bool
+    has_accuracy_metadata: bool
+
+    @property
+    def accepted(self) -> bool:
+        return self.ex_rating_improved or self.standard_rating_improved
 
 
 def authenticate_bearer_token(authorization: str | None, expected_key: str | None) -> str | None:
@@ -53,6 +73,17 @@ def get_effective_rating(player_id: str) -> tuple[float | None, str | None]:
     if override is not None:
         return override.ex_rating, None
     return entry.ex_rating, None
+
+
+def get_previous_standard_rating(player_id: str) -> float:
+    score_rows = load_player_scores_from_supabase(player_id)
+    if not score_rows or not stored_scores_have_accuracy(score_rows):
+        return 0.0
+
+    ratings = build_ratings_from_stored_scores(score_rows)
+    if not ratings:
+        return 0.0
+    return player_standard_rating_with_completion(ratings)
 
 
 def _score_has_accuracy(score: dict[str, object]) -> bool:
@@ -120,7 +151,83 @@ def normalize_submission_scores(raw_scores: object) -> tuple[list[dict[str, obje
 
 def recompute_ex_rating(scores: list[dict[str, object]]) -> float:
     ratings = build_ratings_from_stored_scores(scores)
+    if not ratings:
+        return 0.0
     return player_ex_rating_with_completion(ratings)
+
+
+def recompute_standard_rating(scores: list[dict[str, object]]) -> float:
+    if not stored_scores_have_accuracy(scores):
+        return 0.0
+    ratings = build_ratings_from_stored_scores(scores)
+    if not ratings:
+        return 0.0
+    return player_standard_rating_with_completion(ratings)
+
+
+def evaluate_submission_improvement(
+    *,
+    player_id: str,
+    scores: list[dict[str, object]],
+    prev_ex_rating: float,
+) -> SubmissionImprovement:
+    computed_ex_rating = recompute_ex_rating(scores)
+    prev_standard_rating = get_previous_standard_rating(player_id)
+    computed_standard_rating = recompute_standard_rating(scores)
+    return SubmissionImprovement(
+        computed_ex_rating=computed_ex_rating,
+        computed_standard_rating=computed_standard_rating,
+        prev_standard_rating=prev_standard_rating,
+        ex_rating_improved=computed_ex_rating > prev_ex_rating,
+        standard_rating_improved=(
+            stored_scores_have_accuracy(scores)
+            and computed_standard_rating > prev_standard_rating
+        ),
+        has_accuracy_metadata=stored_scores_have_accuracy(scores),
+    )
+
+
+def submission_rejection_message(
+    *,
+    prev_ex_rating: float,
+    improvement: SubmissionImprovement,
+) -> str:
+    ex_part = (
+        f"Your submitted EX Rating ({format_rating_display(improvement.computed_ex_rating)}) must be higher than "
+        f"your current leaderboard rating ({format_rating_display(prev_ex_rating)})."
+    )
+    if improvement.has_accuracy_metadata:
+        standard_part = (
+            f"Your submitted Standard Rating ({format_rating_display(improvement.computed_standard_rating)}) must be higher than "
+            f"your stored Standard Rating ({format_rating_display(improvement.prev_standard_rating)})."
+        )
+        return f"{ex_part} {standard_part}"
+    return ex_part
+
+
+def validate_rating_submission(
+    *,
+    player_id: str,
+    current_ex_rating: float,
+    scores: list[dict[str, object]],
+) -> tuple[bool, str | None]:
+    if not scores:
+        return False, "No rated Classic charts found in submission."
+
+    improvement = evaluate_submission_improvement(
+        player_id=player_id,
+        scores=scores,
+        prev_ex_rating=current_ex_rating,
+    )
+    if improvement.computed_ex_rating <= 0:
+        return False, "No rated Classic charts found in submission."
+    if improvement.accepted:
+        return True, None
+
+    return False, submission_rejection_message(
+        prev_ex_rating=current_ex_rating,
+        improvement=improvement,
+    )
 
 
 def compute_rank_after_update(
@@ -156,6 +263,7 @@ def _write_submission_transaction(
     prev_rating: float,
     prev_rank: int,
     new_rank: int,
+    record_activity: bool,
     db_url: str | None = None,
 ) -> None:
     postgres = _connect_postgres(db_url)
@@ -213,7 +321,7 @@ def _write_submission_transaction(
                         batch,
                     )
 
-                if ex_rating > prev_rating:
+                if record_activity:
                     cur.execute(
                         """
                         INSERT INTO leaderboard_activity (
@@ -235,55 +343,60 @@ def _write_submission_transaction(
         postgres.close()
 
 
-def process_mod_submission(payload: dict[str, object]) -> SubmissionResult:
+def process_player_submission(
+    player_id: str,
+    scores: list[dict[str, object]],
+    last_updated: str | None = None,
+) -> SubmissionResult:
     if not get_supabase_db_url():
         return SubmissionResult(success=False, error="Database is not configured.")
 
-    player_id = str(payload.get("player_id", "")).strip()
-    if not player_id:
-        return SubmissionResult(success=False, error="player_id is required.")
-
-    prev_rating, player_error = get_effective_rating(player_id)
-    if player_error or prev_rating is None:
+    prev_ex_rating, player_error = get_effective_rating(player_id)
+    if player_error or prev_ex_rating is None:
         return SubmissionResult(success=False, error=player_error or "Player not found.")
 
-    scores, scores_error = normalize_submission_scores(payload.get("scores"))
-    if scores_error:
-        return SubmissionResult(success=False, error=scores_error)
-
-    computed_rating = recompute_ex_rating(scores)
-    if computed_rating <= 0:
+    if not scores:
         return SubmissionResult(success=False, error="No rated Classic charts found in submission.")
 
-    if computed_rating <= prev_rating:
+    improvement = evaluate_submission_improvement(
+        player_id=player_id,
+        scores=scores,
+        prev_ex_rating=prev_ex_rating,
+    )
+    if improvement.computed_ex_rating <= 0:
+        return SubmissionResult(success=False, error="No rated Classic charts found in submission.")
+
+    if not improvement.accepted:
         return SubmissionResult(
             success=False,
-            error=(
-                f"Your submitted rating ({format_rating_display(computed_rating)}) must be higher than "
-                f"your current leaderboard rating ({format_rating_display(prev_rating)})."
+            error=submission_rejection_message(
+                prev_ex_rating=prev_ex_rating,
+                improvement=improvement,
             ),
         )
 
-    last_updated_raw = payload.get("last_updated")
-    if isinstance(last_updated_raw, str) and last_updated_raw.strip():
-        last_updated = last_updated_raw.strip()
-    else:
-        last_updated = datetime.now(timezone.utc).isoformat()
+    timestamp = last_updated or datetime.now(timezone.utc).isoformat()
+    stored_ex_rating = (
+        improvement.computed_ex_rating
+        if improvement.ex_rating_improved
+        else prev_ex_rating
+    )
 
     overrides = load_updated_ratings_from_supabase()
     prev_rank = compute_rank_after_update(
         player_id,
-        prev_rating,
-        last_updated=last_updated,
+        prev_ex_rating,
+        last_updated=timestamp,
         overrides=overrides,
     )
     if prev_rank is None:
         return SubmissionResult(success=False, error="Could not determine current leaderboard rank.")
 
+    rank_rating = stored_ex_rating
     new_rank = compute_rank_after_update(
         player_id,
-        computed_rating,
-        last_updated=last_updated,
+        rank_rating,
+        last_updated=timestamp,
         overrides=overrides,
     )
     if new_rank is None:
@@ -292,19 +405,42 @@ def process_mod_submission(payload: dict[str, object]) -> SubmissionResult:
     try:
         _write_submission_transaction(
             player_id=player_id,
-            ex_rating=computed_rating,
-            last_updated=last_updated,
+            ex_rating=stored_ex_rating,
+            last_updated=timestamp,
             scores=scores,
-            prev_rating=prev_rating,
+            prev_rating=prev_ex_rating,
             prev_rank=prev_rank,
             new_rank=new_rank,
+            record_activity=improvement.ex_rating_improved,
         )
     except Exception as error:
         return SubmissionResult(success=False, error=f"Could not save submission: {error}")
 
+    message = "Rating update saved to the leaderboard."
+    if improvement.standard_rating_improved and not improvement.ex_rating_improved:
+        message = "Score update saved to the leaderboard."
+
     return SubmissionResult(
         success=True,
-        message="Rating update saved to the leaderboard.",
-        ex_rating=computed_rating,
+        message=message,
+        ex_rating=stored_ex_rating,
         new_rank=new_rank,
     )
+
+
+def process_mod_submission(payload: dict[str, object]) -> SubmissionResult:
+    player_id = str(payload.get("player_id", "")).strip()
+    if not player_id:
+        return SubmissionResult(success=False, error="player_id is required.")
+
+    scores, scores_error = normalize_submission_scores(payload.get("scores"))
+    if scores_error:
+        return SubmissionResult(success=False, error=scores_error)
+
+    last_updated_raw = payload.get("last_updated")
+    last_updated = (
+        last_updated_raw.strip()
+        if isinstance(last_updated_raw, str) and last_updated_raw.strip()
+        else None
+    )
+    return process_player_submission(player_id, scores, last_updated=last_updated)

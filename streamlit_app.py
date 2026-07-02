@@ -71,6 +71,7 @@ leaderboard_available = public_leaderboard_module.leaderboard_available
 SUPABASE_LOAD_ERROR_MESSAGE = public_leaderboard_module.SUPABASE_LOAD_ERROR_MESSAGE
 validate_full_ex_rating_submission = full_ex_submissions_module.validate_full_ex_rating_submission
 submit_full_ex_rating_update = full_ex_submissions_module.submit_full_ex_rating_update
+extract_classic_chart_scores = full_ex_submissions_module.extract_classic_chart_scores
 load_leaderboard_activity = leaderboard_activity_module.load_leaderboard_activity
 combine_consecutive_activity_entries = leaderboard_activity_module.combine_consecutive_activity_entries
 LeaderboardActivityEntry = leaderboard_activity_module.LeaderboardActivityEntry
@@ -1284,11 +1285,18 @@ def _render_full_ex_submission_panel(
 ) -> None:
     submission_file: st.runtime.uploaded_file_manager.UploadedFile | None = None
     submission_ratings: list[ChartRating] | None = None
+    submission_scores: list[dict[str, object]] | None = None
     submission_error: str | None = None
 
     if uploaded is not None:
         submission_file = uploaded
         submission_ratings = ratings
+        if submission_file is not None:
+            try:
+                highscores = json.loads(submission_file.getvalue().decode("utf-8"))
+                submission_scores = extract_classic_chart_scores(highscores)
+            except json.JSONDecodeError:
+                submission_scores = None
         _render_submission_using_line(uploaded.name, from_above=True)
     else:
         submission_file = st.file_uploader(
@@ -1300,6 +1308,12 @@ def _render_full_ex_submission_panel(
             submission_ratings, submission_error = _load_ratings_from_upload(submission_file)
             if submission_error:
                 st.error(submission_error)
+            else:
+                try:
+                    highscores = json.loads(submission_file.getvalue().decode("utf-8"))
+                    submission_scores = extract_classic_chart_scores(highscores)
+                except json.JSONDecodeError:
+                    submission_scores = None
         else:
             st.info("Upload your arcade-highscores.json to submit.")
 
@@ -1318,7 +1332,7 @@ def _render_full_ex_submission_panel(
         )
     )
     st.caption(
-        "_Note: Existing ratings can only be updated with a higher rating. "
+        "_Note: Submissions are accepted when EX Rating or Standard Rating increases. "
         "Contact Nico with any issues or requests._"
     )
 
@@ -1384,12 +1398,14 @@ def _render_full_ex_submission_panel(
     submission_blocked_reason: str | None = None
     if (
         selected_entry is not None
-        and submitted_rating is not None
+        and submission_scores
         and not submission_accepted
     ):
         _, submission_blocked_reason = validate_full_ex_rating_submission(
             selected_entry.ex_rating,
-            submitted_rating,
+            submitted_rating or 0.0,
+            player_id=selected_entry.player_id,
+            scores=submission_scores,
         )
 
     submission_in_progress = st.session_state.get("full_ex_submission_in_progress", False)
@@ -1406,7 +1422,7 @@ def _render_full_ex_submission_panel(
                 disabled=(
                     submission_in_progress
                     or submission_file is None
-                    or submission_ratings is None
+                    or not submission_scores
                     or submission_error is not None
                     or not supabase_configured()
                     or selected_entry is None

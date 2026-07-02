@@ -1,14 +1,12 @@
 from datetime import datetime, timezone
 
-from rating.constants import DEFAULT_MAX_SCORES_PATH, SCORE_SOURCE_SUBMISSION
+from rating.constants import DEFAULT_MAX_SCORES_PATH
 from rating.data import load_critical_max_scores
 from rating.entries import chart_key, critical_count, is_classic_entry, miss_count, split_chart_key
 from rating.formatting import format_rating_display
 from rating.imported_players import resolve_max_score_chart_key
-from rating.leaderboard_activity import record_leaderboard_activity
-from rating.public_leaderboard import player_rank_on_leaderboard
+from rating.submission_api import process_player_submission, validate_rating_submission
 from rating.supabase_config import supabase_configured
-from rating.supabase_leaderboard import load_updated_ratings_from_supabase, submit_player_update_to_supabase
 
 
 def extract_classic_chart_scores(
@@ -52,7 +50,17 @@ def extract_classic_chart_scores(
 def validate_full_ex_rating_submission(
     current_rating: float,
     new_rating: float,
+    *,
+    player_id: str | None = None,
+    scores: list[dict[str, object]] | None = None,
 ) -> tuple[bool, str | None]:
+    if player_id is not None and scores is not None:
+        return validate_rating_submission(
+            player_id=player_id,
+            current_ex_rating=current_rating,
+            scores=scores,
+        )
+
     if new_rating <= current_rating:
         return False, (
             f"Your submitted rating ({format_rating_display(new_rating)}) must be higher than "
@@ -70,6 +78,8 @@ def submit_full_ex_rating_update(
     prev_rating: float | None = None,
     prev_rank: int | None = None,
 ) -> tuple[bool, str]:
+    del ex_rating, prev_rating, prev_rank
+
     if not supabase_configured():
         return False, "Supabase is not configured yet."
 
@@ -78,33 +88,8 @@ def submit_full_ex_rating_update(
         return False, "No rated Classic charts found in that file."
 
     timestamp = last_updated or datetime.now(timezone.utc).isoformat()
-    try:
-        submit_player_update_to_supabase(
-            player_id=player_id,
-            ex_rating=ex_rating,
-            last_updated=timestamp,
-            scores=scores,
-            source=SCORE_SOURCE_SUBMISSION,
-        )
+    result = process_player_submission(player_id, scores, last_updated=timestamp)
+    if not result.success:
+        return False, result.error or "Submission rejected."
 
-        if prev_rating is not None and prev_rank is not None:
-            overrides = load_updated_ratings_from_supabase()
-            stored_rating = overrides.get(player_id)
-            ranked_rating = stored_rating.ex_rating if stored_rating is not None else ex_rating
-            new_rank = player_rank_on_leaderboard(
-                player_id,
-                rating_overrides=overrides,
-            )
-            if new_rank is not None:
-                record_leaderboard_activity(
-                    player_id=player_id,
-                    prev_rating=prev_rating,
-                    new_rating=ranked_rating,
-                    prev_rank=prev_rank,
-                    new_rank=new_rank,
-                    created_at=timestamp,
-                )
-    except Exception as error:
-        return False, f"Could not save submission: {error}"
-
-    return True, "Rating update saved to the leaderboard."
+    return True, result.message or "Rating update saved to the leaderboard."

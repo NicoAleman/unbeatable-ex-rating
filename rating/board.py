@@ -124,6 +124,14 @@ def player_ex_rating_with_completion(
     return ex_total + COMPLETION_BONUS
 
 
+def player_standard_rating_with_completion(
+    ratings: list[ChartRating],
+    top_n: int = TOP_N,
+) -> float:
+    _, standard_total, _, _ = get_rating_boards(ratings, top_n)
+    return standard_total + COMPLETION_BONUS
+
+
 def format_ex_rating_board_csv(
     ratings: list[ChartRating],
     top_n: int = TOP_N,
