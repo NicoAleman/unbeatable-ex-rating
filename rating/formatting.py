@@ -5,8 +5,22 @@ def format_rating_display(value: float) -> str:
     return f"{value:.{DISPLAY_RATING_DECIMALS}f}"
 
 
+def ratings_are_equal(prev_rating: float, new_rating: float) -> bool:
+    return float(prev_rating) == float(new_rating)
+
+
 def format_potential_gain_display(value: float) -> str:
     return f"+{value:.{DISPLAY_RATING_DECIMALS}f}"
+
+
+def format_activity_rating_delta(prev_rating: float, new_rating: float) -> str | None:
+    prev = float(prev_rating)
+    new = float(new_rating)
+    if new <= prev:
+        return None
+    if format_rating_display(prev) == format_rating_display(new):
+        return format_potential_gain_display(0.0)
+    return format_potential_gain_display(new - prev)
 
 
 def format_song_display_name(raw_name: str, max_scores_path=None) -> str:

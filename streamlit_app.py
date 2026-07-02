@@ -59,6 +59,7 @@ EX_RATING_LEADERBOARD_DB_PATH = constants_module.EX_RATING_LEADERBOARD_DB_PATH
 FULL_EX_RATING_LEADERBOARD_PATH = constants_module.FULL_EX_RATING_LEADERBOARD_PATH
 TOP_N = constants_module.TOP_N
 format_rating_display = formatting_module.format_rating_display
+format_activity_rating_delta = formatting_module.format_activity_rating_delta
 format_song_display_name = formatting_module.format_song_display_name
 potential_gains_from_perfect = board_module.potential_gains_from_perfect
 competition_ranks_for_values = board_module.competition_ranks_for_values
@@ -72,8 +73,7 @@ SUPABASE_LOAD_ERROR_MESSAGE = public_leaderboard_module.SUPABASE_LOAD_ERROR_MESS
 validate_full_ex_rating_submission = full_ex_submissions_module.validate_full_ex_rating_submission
 submit_full_ex_rating_update = full_ex_submissions_module.submit_full_ex_rating_update
 extract_classic_chart_scores = full_ex_submissions_module.extract_classic_chart_scores
-load_leaderboard_activity = leaderboard_activity_module.load_leaderboard_activity
-combine_consecutive_activity_entries = leaderboard_activity_module.combine_consecutive_activity_entries
+load_leaderboard_activity_feed = leaderboard_activity_module.load_leaderboard_activity_feed
 LeaderboardActivityEntry = leaderboard_activity_module.LeaderboardActivityEntry
 load_players_with_scores_from_supabase = supabase_leaderboard_module.load_players_with_scores_from_supabase
 load_player_ratings_from_supabase = supabase_leaderboard_module.load_player_ratings_from_supabase
@@ -1579,10 +1579,10 @@ def render_full_ex_rating_leaderboard(
 
 
 def _format_activity_rating_delta(prev_rating: float, new_rating: float) -> str:
-    delta = new_rating - prev_rating
-    if delta <= 0:
+    delta_text = format_activity_rating_delta(prev_rating, new_rating)
+    if delta_text is None:
         return '<span class="activity-feed-rating-delta activity-feed-delta--empty"></span>'
-    return f'<span class="activity-feed-rating-delta">(+{format_rating_display(delta)})</span>'
+    return f'<span class="activity-feed-rating-delta">({delta_text})</span>'
 
 
 def _format_activity_rank_delta(prev_rank: int, new_rank: int) -> str:
@@ -1618,7 +1618,7 @@ def _render_activity_feed_item(entry: LeaderboardActivityEntry) -> str:
 
 @st.cache_data(ttl=60, show_spinner="Loading...")
 def _load_leaderboard_activity_feed(limit: int = LEADERBOARD_ACTIVITY_FEED_LIMIT):
-    return combine_consecutive_activity_entries(load_leaderboard_activity(limit=limit))
+    return load_leaderboard_activity_feed(limit=limit)
 
 
 def render_leaderboard_activity_feed() -> None:
