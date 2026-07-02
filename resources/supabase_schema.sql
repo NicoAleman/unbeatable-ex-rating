@@ -17,7 +17,7 @@ CREATE TABLE scores (
     song TEXT NOT NULL,
     difficulty TEXT NOT NULL,
     score INTEGER NOT NULL,
-    source TEXT NOT NULL CHECK (source IN ('seed', 'submission')),
+    source TEXT NOT NULL CHECK (source IN ('seed', 'submission', 'in_game')),
     PRIMARY KEY (player_id, song, difficulty)
 );
 

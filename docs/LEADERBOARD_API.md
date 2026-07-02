@@ -53,7 +53,7 @@ One row per player per chart (song + difficulty). Primary key: `(player_id, song
 | `song` | `TEXT` | Internal song identifier (matches `ArcadeMaxScores.csv`) |
 | `difficulty` | `TEXT` | e.g. `Star`, `Hard`, `UNBEATABLE` |
 | `score` | `INTEGER` | Classic mode score |
-| `source` | `TEXT` | `'seed'` (bulk import) or `'submission'` (player update) |
+| `source` | `TEXT` | `'seed'` (bulk import), `'submission'` (site upload), or `'in_game'` (mod API) |
 | `accuracy` | `DOUBLE PRECISION` | Optional. Note accuracy as **0–100 percent** (not 0–1) |
 | `miss_count` | `INTEGER` | Optional |
 | `max_combo` | `INTEGER` | Optional |
@@ -75,9 +75,7 @@ Append-only feed of rating increases.
 | `prev_rank` | `INTEGER` | Competition rank before |
 | `new_rank` | `INTEGER` | Competition rank after |
 | `created_at` | `TIMESTAMPTZ` | Defaults to `NOW()` |
-| `submission_source` | `TEXT` | `'mod'` or `'site'`; `NULL` for backfilled rows. **Admin/audit only** — not shown on the public site |
-
-Allowed values: `mod` (game mod → Render API), `site` (Streamlit upload). Historical/backfilled entries leave this `NULL`.
+| `submission_source` | `TEXT` | `'in_game'` or `'submission'`; `NULL` for backfilled rows. **Admin/audit only** — matches `scores.source` for player updates |
 
 ---
 
@@ -170,17 +168,20 @@ ON CONFLICT (player_id) DO UPDATE SET
     last_updated = EXCLUDED.last_updated;
 ```
 
-**2. Replace submission scores**
+**2. Replace player scores**
 
-Delete existing submission rows, then upsert the full score list:
+Delete existing rows for that channel, then upsert the full score list with the matching `source`:
+
+- Site upload → `source = 'submission'`
+- Mod API → `source = 'in_game'`
 
 ```sql
-DELETE FROM scores WHERE player_id = $1 AND source = 'submission';
+DELETE FROM scores WHERE player_id = $1 AND source = $2;  -- 'submission' or 'in_game'
 
 INSERT INTO scores (
     player_id, song, difficulty, score, source,
     accuracy, miss_count, max_combo, cleared, critical_count
-) VALUES ($1, $2, $3, $4, 'submission', $5, $6, $7, $8, $9)
+) VALUES ($1, $2, $3, $4, $2, $5, $6, $7, $8, $9)
 ON CONFLICT (player_id, song, difficulty) DO UPDATE SET
     score = EXCLUDED.score,
     source = EXCLUDED.source,
@@ -201,7 +202,7 @@ INSERT INTO leaderboard_activity (
 ) VALUES ($1, $2, $3, $4, $5, $6, $7);
 ```
 
-Only write a feed entry when EX rating increased. Set `submission_source` to `'mod'` (Render API) or `'site'` (Streamlit upload).
+Only write a feed entry when EX rating increased. Set `submission_source` to `'in_game'` (mod API) or `'submission'` (site upload), matching `scores.source`.
 
 ---
 
@@ -466,3 +467,5 @@ Schema source of truth: `supabase/migrations/`
 - `20260630120000_scores_accuracy.sql` — accuracy metadata columns
 - `20260701120000_leaderboard_activity.sql` — activity feed
 - `20260702120000_leaderboard_activity_submission_source.sql` — activity feed source column
+- `20260702130000_scores_in_game_source.sql` — mod score source (`in_game`)
+- `20260702140000_leaderboard_activity_source_values.sql` — align activity source with scores (`in_game` / `submission`)

@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 import psycopg2.errors
 
 from rating.baseline_leaderboard import load_baseline_leaderboard_csv
-from rating.constants import EX_RATING_BASELINE_PATH, SUBMISSION_SOURCES
+from rating.constants import EX_RATING_BASELINE_PATH, PLAYER_SCORE_SOURCES, SCORE_SOURCE_IN_GAME, SCORE_SOURCE_SUBMISSION
 from rating.supabase_config import supabase_configured
 from rating.supabase_leaderboard import _connect_postgres, _format_timestamp
 
@@ -22,10 +22,10 @@ class LeaderboardActivityEntry:
 
 
 def format_submission_source_label(submission_source: str | None) -> str | None:
-    if submission_source == "mod":
-        return "Mod"
-    if submission_source == "site":
-        return "Site"
+    if submission_source == SCORE_SOURCE_IN_GAME:
+        return "In-game"
+    if submission_source == SCORE_SOURCE_SUBMISSION:
+        return "Submission"
     return None
 
 
@@ -40,7 +40,7 @@ def record_leaderboard_activity(
     submission_source: str | None = None,
     db_url: str | None = None,
 ) -> None:
-    if submission_source is not None and submission_source not in SUBMISSION_SOURCES:
+    if submission_source is not None and submission_source not in PLAYER_SCORE_SOURCES:
         raise ValueError(f"Invalid submission_source: {submission_source!r}")
 
     timestamp = created_at or datetime.now(timezone.utc).isoformat()

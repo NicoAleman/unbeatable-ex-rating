@@ -160,8 +160,8 @@ UgsWaitSeconds = 2
 On success, one Postgres transaction:
 
 1. Upsert `updated_ratings`
-2. Replace `submission` rows in `scores`
-3. Insert `leaderboard_activity` when EX rating increased, with `submission_source` (`mod` or `site`)
+2. Replace player rows in `scores` (`in_game` for mod API, `submission` for site)
+3. Insert `leaderboard_activity` when EX rating increased, with `submission_source` (`in_game` or `submission`)
 
 ---
 

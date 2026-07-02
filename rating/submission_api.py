@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from rating.baseline_leaderboard import UpdatedRating, load_baseline_leaderboard_csv
 from rating.board import player_ex_rating_with_completion, player_standard_rating_with_completion
 from rating.chart_levels import load_chart_rating_levels, resolve_chart_rating_level
-from rating.constants import DEFAULT_MAX_SCORES_PATH, SCORE_SOURCE_SUBMISSION, SUBMISSION_SOURCE_MOD
+from rating.constants import DEFAULT_MAX_SCORES_PATH, SCORE_SOURCE_IN_GAME, SCORE_SOURCE_SUBMISSION
 from rating.data import load_critical_max_scores
 from rating.formatting import format_rating_display
 from rating.imported_players import (
@@ -267,6 +267,7 @@ def _write_submission_transaction(
     submission_source: str | None = None,
     db_url: str | None = None,
 ) -> None:
+    score_source = submission_source or SCORE_SOURCE_SUBMISSION
     postgres = _connect_postgres(db_url)
     score_payload = [
         (
@@ -274,7 +275,7 @@ def _write_submission_transaction(
             str(score["song"]),
             str(score["difficulty"]),
             int(score["score"]),
-            SCORE_SOURCE_SUBMISSION,
+            score_source,
             score.get("accuracy"),
             score.get("miss_count"),
             score.get("max_combo"),
@@ -299,7 +300,7 @@ def _write_submission_transaction(
                 )
                 cur.execute(
                     "DELETE FROM scores WHERE player_id = %s AND source = %s",
-                    (player_id, SCORE_SOURCE_SUBMISSION),
+                    (player_id, score_source),
                 )
                 for batch in _batched(score_payload):
                     psycopg2.extras.execute_batch(
@@ -453,5 +454,5 @@ def process_mod_submission(payload: dict[str, object]) -> SubmissionResult:
         player_id,
         scores,
         last_updated=last_updated,
-        submission_source=SUBMISSION_SOURCE_MOD,
+        submission_source=SCORE_SOURCE_IN_GAME,
     )
