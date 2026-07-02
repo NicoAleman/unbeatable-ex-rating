@@ -5,6 +5,7 @@ import psycopg2.errors
 
 from rating.baseline_leaderboard import load_baseline_leaderboard_csv
 from rating.constants import EX_RATING_BASELINE_PATH, PLAYER_SCORE_SOURCES, SCORE_SOURCE_IN_GAME, SCORE_SOURCE_SUBMISSION
+from rating.formatting import ratings_are_equal
 from rating.supabase_config import supabase_configured
 from rating.supabase_leaderboard import _connect_postgres, _format_timestamp
 
@@ -19,6 +20,10 @@ class LeaderboardActivityEntry:
     new_rank: int
     created_at: datetime
     submission_source: str | None = None
+
+
+def activity_entry_has_rating_change(entry: LeaderboardActivityEntry) -> bool:
+    return not ratings_are_equal(entry.prev_rating, entry.new_rating)
 
 
 def format_submission_source_label(submission_source: str | None) -> str | None:
@@ -40,6 +45,9 @@ def record_leaderboard_activity(
     submission_source: str | None = None,
     db_url: str | None = None,
 ) -> None:
+    if ratings_are_equal(prev_rating, new_rating):
+        return
+
     if submission_source is not None and submission_source not in PLAYER_SCORE_SOURCES:
         raise ValueError(f"Invalid submission_source: {submission_source!r}")
 
@@ -161,21 +169,47 @@ def combine_consecutive_activity_entries(
         oldest = entries[streak_end]
 
         if index == streak_end:
-            combined.append(newest)
+            combined_entry = newest
         else:
-            combined.append(
-                LeaderboardActivityEntry(
-                    player_id=newest.player_id,
-                    display_name=newest.display_name,
-                    prev_rating=oldest.prev_rating,
-                    new_rating=newest.new_rating,
-                    prev_rank=oldest.prev_rank,
-                    new_rank=newest.new_rank,
-                    created_at=newest.created_at,
-                    submission_source=newest.submission_source,
-                )
+            combined_entry = LeaderboardActivityEntry(
+                player_id=newest.player_id,
+                display_name=newest.display_name,
+                prev_rating=oldest.prev_rating,
+                new_rating=newest.new_rating,
+                prev_rank=oldest.prev_rank,
+                new_rank=newest.new_rank,
+                created_at=newest.created_at,
+                submission_source=newest.submission_source,
             )
+
+        if activity_entry_has_rating_change(combined_entry):
+            combined.append(combined_entry)
 
         index = streak_end + 1
 
     return combined
+
+
+def load_leaderboard_activity_feed(
+    *,
+    limit: int = 20,
+    db_url: str | None = None,
+    baseline_path=EX_RATING_BASELINE_PATH,
+) -> list[LeaderboardActivityEntry]:
+    """Load, merge, and filter activity rows, skipping unchanged rating updates."""
+    if limit <= 0:
+        return []
+
+    fetch_limit = max(limit * 3, limit)
+    max_fetch = max(limit * 20, fetch_limit)
+
+    while True:
+        raw = load_leaderboard_activity(
+            limit=fetch_limit,
+            db_url=db_url,
+            baseline_path=baseline_path,
+        )
+        combined = combine_consecutive_activity_entries(raw)
+        if len(combined) >= limit or len(raw) < fetch_limit or fetch_limit >= max_fetch:
+            return combined[:limit]
+        fetch_limit = min(fetch_limit * 2, max_fetch)
