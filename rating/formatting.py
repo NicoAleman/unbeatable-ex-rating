@@ -1,12 +1,24 @@
 from rating.constants import DEFAULT_MAX_SCORES_PATH, DISPLAY_RATING_DECIMALS
 
+# Match Postgres float8 storage closely enough for rating-scale values (~10–13).
+STORED_RATING_DECIMALS = 12
+
+
+def as_stored_rating(value: float) -> float:
+    """Normalize a rating the way Postgres float8 stores it for comparisons."""
+    return round(float(value), STORED_RATING_DECIMALS)
+
 
 def format_rating_display(value: float) -> str:
     return f"{value:.{DISPLAY_RATING_DECIMALS}f}"
 
 
 def ratings_are_equal(prev_rating: float, new_rating: float) -> bool:
-    return float(prev_rating) == float(new_rating)
+    return as_stored_rating(prev_rating) == as_stored_rating(new_rating)
+
+
+def rating_increased(prev_rating: float, new_rating: float) -> bool:
+    return as_stored_rating(new_rating) > as_stored_rating(prev_rating)
 
 
 def format_potential_gain_display(value: float) -> str:
@@ -14,13 +26,11 @@ def format_potential_gain_display(value: float) -> str:
 
 
 def format_activity_rating_delta(prev_rating: float, new_rating: float) -> str | None:
-    prev = float(prev_rating)
-    new = float(new_rating)
-    if new <= prev:
+    if not rating_increased(prev_rating, new_rating):
         return None
-    if format_rating_display(prev) == format_rating_display(new):
-        return format_potential_gain_display(0.0)
-    return format_potential_gain_display(new - prev)
+    return format_potential_gain_display(
+        as_stored_rating(new_rating) - as_stored_rating(prev_rating)
+    )
 
 
 def format_song_display_name(raw_name: str, max_scores_path=None) -> str:

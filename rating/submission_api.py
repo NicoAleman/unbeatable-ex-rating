@@ -8,7 +8,7 @@ from rating.board import player_ex_rating_with_completion, player_standard_ratin
 from rating.chart_levels import load_chart_rating_levels, resolve_chart_rating_level
 from rating.constants import DEFAULT_MAX_SCORES_PATH, SCORE_SOURCE_IN_GAME, SCORE_SOURCE_SUBMISSION
 from rating.data import load_critical_max_scores
-from rating.formatting import format_rating_display
+from rating.formatting import format_rating_display, rating_increased
 from rating.imported_players import (
     build_ratings_from_stored_scores,
     resolve_max_score_chart_key,
@@ -178,10 +178,10 @@ def evaluate_submission_improvement(
         computed_ex_rating=computed_ex_rating,
         computed_standard_rating=computed_standard_rating,
         prev_standard_rating=prev_standard_rating,
-        ex_rating_improved=computed_ex_rating > prev_ex_rating,
+        ex_rating_improved=rating_increased(prev_ex_rating, computed_ex_rating),
         standard_rating_improved=(
             stored_scores_have_accuracy(scores)
-            and computed_standard_rating > prev_standard_rating
+            and rating_increased(prev_standard_rating, computed_standard_rating)
         ),
         has_accuracy_metadata=stored_scores_have_accuracy(scores),
     )
@@ -323,7 +323,7 @@ def _write_submission_transaction(
                         batch,
                     )
 
-                if record_activity:
+                if record_activity and rating_increased(prev_rating, ex_rating):
                     cur.execute(
                         """
                         INSERT INTO leaderboard_activity (

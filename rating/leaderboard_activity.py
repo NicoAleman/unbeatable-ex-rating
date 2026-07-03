@@ -5,7 +5,7 @@ import psycopg2.errors
 
 from rating.baseline_leaderboard import load_baseline_leaderboard_csv
 from rating.constants import EX_RATING_BASELINE_PATH, PLAYER_SCORE_SOURCES, SCORE_SOURCE_IN_GAME, SCORE_SOURCE_SUBMISSION
-from rating.formatting import ratings_are_equal
+from rating.formatting import rating_increased, ratings_are_equal
 from rating.supabase_config import supabase_configured
 from rating.supabase_leaderboard import _connect_postgres, _format_timestamp
 
@@ -45,7 +45,7 @@ def record_leaderboard_activity(
     submission_source: str | None = None,
     db_url: str | None = None,
 ) -> None:
-    if ratings_are_equal(prev_rating, new_rating):
+    if not rating_increased(prev_rating, new_rating):
         return
 
     if submission_source is not None and submission_source not in PLAYER_SCORE_SOURCES:
