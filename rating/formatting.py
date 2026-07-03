@@ -1,20 +1,24 @@
-from rating.constants import DEFAULT_MAX_SCORES_PATH, DISPLAY_RATING_DECIMALS
-
-# Match Postgres float8 storage closely enough for rating-scale values (~10–13).
-STORED_RATING_DECIMALS = 12
-
-
-def as_stored_rating(value: float) -> float:
-    """Normalize a rating the way Postgres float8 stores it for comparisons."""
-    return round(float(value), STORED_RATING_DECIMALS)
+from rating.constants import (
+    DEFAULT_MAX_SCORES_PATH,
+    DISPLAY_RATING_DECIMALS,
+    RATING_COMPARISON_DECIMALS,
+)
 
 
 def format_rating_display(value: float) -> str:
     return f"{value:.{DISPLAY_RATING_DECIMALS}f}"
 
 
+def format_rating_comparison(value: float) -> str:
+    return f"{value:.{RATING_COMPARISON_DECIMALS}f}"
+
+
+def as_stored_rating(value: float) -> float:
+    """Normalize a rating for increase comparisons (4 decimal places)."""
+    return float(format_rating_comparison(value))
+
 def ratings_are_equal(prev_rating: float, new_rating: float) -> bool:
-    return as_stored_rating(prev_rating) == as_stored_rating(new_rating)
+    return format_rating_comparison(prev_rating) == format_rating_comparison(new_rating)
 
 
 def rating_increased(prev_rating: float, new_rating: float) -> bool:
