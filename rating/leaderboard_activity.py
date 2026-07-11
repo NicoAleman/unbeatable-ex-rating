@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import psycopg2.errors
 
@@ -8,6 +8,8 @@ from rating.constants import EX_RATING_BASELINE_PATH, PLAYER_SCORE_SOURCES, SCOR
 from rating.formatting import rating_increased, ratings_are_equal
 from rating.supabase_config import supabase_configured
 from rating.supabase_leaderboard import _connect_postgres, _format_timestamp
+
+ACTIVITY_HOURLY_COMBINE_WINDOW = timedelta(hours=2)
 
 
 @dataclass(frozen=True)
@@ -198,6 +200,48 @@ def _combine_activity_streak(
     return None
 
 
+def combine_hourly_activity_entries(
+    entries: list[LeaderboardActivityEntry],
+) -> list[LeaderboardActivityEntry]:
+    """Merge same-player rows within two hours, scanning oldest-first and keeping the later timestamp."""
+    meaningful_entries = filter_unchanged_activity_entries(entries)
+    if not meaningful_entries:
+        return []
+
+    oldest_first = sorted(meaningful_entries, key=lambda entry: entry.created_at)
+    by_player: dict[str, list[LeaderboardActivityEntry]] = {}
+    for entry in oldest_first:
+        by_player.setdefault(entry.player_id, []).append(entry)
+
+    merged: list[LeaderboardActivityEntry] = []
+    for player_entries in by_player.values():
+        index = 0
+        while index < len(player_entries):
+            streak_end = index
+            group_latest = player_entries[index].created_at
+
+            while streak_end + 1 < len(player_entries):
+                next_entry = player_entries[streak_end + 1]
+                if next_entry.created_at - group_latest > ACTIVITY_HOURLY_COMBINE_WINDOW:
+                    break
+                streak_end += 1
+                group_latest = next_entry.created_at
+
+            streak = player_entries[index : streak_end + 1]
+            combined_entry = _combine_activity_streak(
+                list(reversed(streak)),
+                start=0,
+                end=len(streak) - 1,
+            )
+            if combined_entry is not None:
+                merged.append(combined_entry)
+
+            index = streak_end + 1
+
+    merged.sort(key=lambda entry: entry.created_at, reverse=True)
+    return merged
+
+
 def combine_consecutive_activity_entries(
     entries: list[LeaderboardActivityEntry],
 ) -> list[LeaderboardActivityEntry]:
@@ -246,7 +290,7 @@ def load_leaderboard_activity_feed(
             db_url=db_url,
             baseline_path=baseline_path,
         )
-        combined = combine_consecutive_activity_entries(raw)
+        combined = combine_consecutive_activity_entries(combine_hourly_activity_entries(raw))
         if len(combined) >= limit or len(raw) < fetch_limit or fetch_limit >= max_fetch:
             return combined[:limit]
         fetch_limit = min(fetch_limit * 2, max_fetch)
