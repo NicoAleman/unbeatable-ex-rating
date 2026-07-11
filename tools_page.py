@@ -4,32 +4,10 @@ import streamlit as st
 
 from keybind_configurator_ui import render_keybind_configurator
 
-TOOLS = {
-    "keybind_configurator": "Keybind Configurator",
-}
-
 
 def render_other_tools_page() -> None:
     if "selected_tool" not in st.session_state:
         st.session_state.selected_tool = "keybind_configurator"
-
-    with st.container(key="tools-page-nav"):
-        with st.container(key="tool-picker", horizontal=True, gap="small"):
-            if st.button("Back to EX Rating", key="nav-back-ex-rating"):
-                st.session_state.app_page = "ex_rating"
-                st.rerun()
-
-            for tool_id, label in TOOLS.items():
-                button_type = "primary" if st.session_state.selected_tool == tool_id else "secondary"
-                if st.button(
-                    label,
-                    key=f"tool-select-{tool_id}",
-                    type=button_type,
-                ):
-                    st.session_state.selected_tool = tool_id
-                    st.rerun()
-
-        st.divider()
 
     selected_tool = st.session_state.selected_tool
     if selected_tool == "keybind_configurator":

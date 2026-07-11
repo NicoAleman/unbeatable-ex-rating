@@ -786,6 +786,11 @@ st.markdown(
     .st-key-tool-picker [data-testid="stButton"] button {{
         width: auto !important;
     }}
+    .st-key-tool-picker [data-testid="stMarkdownContainer"] p {{
+        margin: 0 !important;
+        line-height: 2.4 !important;
+        white-space: nowrap !important;
+    }}
     .st-key-tools-page-nav {{
         margin: 0 !important;
         padding: 0 !important;
@@ -1742,24 +1747,27 @@ def _render_page_header(
 def _render_main_tools_nav() -> None:
     with st.container(key="tools-page-nav"):
         with st.container(key="tool-picker", horizontal=True, gap="small"):
-            if st.button("Other Tools", key="nav-other-tools"):
-                st.session_state.app_page = "tools"
-                st.rerun()
+            if st.session_state.app_page == "tools":
+                if st.button("Back to EX Rating", key="nav-back-ex-rating"):
+                    st.session_state.app_page = "ex_rating"
+                    st.rerun()
+                st.button(
+                    "Keybind Configurator",
+                    key="nav-keybind-configurator-active",
+                    type="primary",
+                    disabled=True,
+                )
+            else:
+                st.markdown("Other Tools:")
+                if st.button("Keybind Configurator", key="nav-keyboard-configurator"):
+                    st.session_state.app_page = "tools"
+                    st.session_state.selected_tool = "keybind_configurator"
+                    st.rerun()
 
         st.divider()
 
 
 _init_app_session_state()
-
-if st.session_state.app_page == "tools":
-    _render_page_header(
-        "Other Tools",
-        "Utilities for UNBEATABLE players",
-        subtitle_font_size_rem=1.125,
-        divider_margin_bottom_rem=0.5,
-    )
-    render_other_tools_page()
-    st.stop()
 
 _render_page_header(
     "Unbeatable EX Rating",
@@ -1767,6 +1775,10 @@ _render_page_header(
     divider_margin_bottom_rem=0.5,
 )
 _render_main_tools_nav()
+
+if st.session_state.app_page == "tools":
+    render_other_tools_page()
+    st.stop()
 st.markdown(
     "Upload your **arcade-highscores.json** or search for a player to see rating boards. "
     "Only Classic speed charts are rated (no Double Time / Half Time or custom charts)."
