@@ -1,4 +1,4 @@
-﻿"""Bingo Board UI for Streamlit."""
+"""Bingo Board UI for Streamlit."""
 
 from __future__ import annotations
 
@@ -370,8 +370,8 @@ def _render_bingo_board_toolbar(*, show_refresh: bool = True) -> None:
                 <span>Hide Bingo Lines</span>
               </label>
               <label class="bingo-board-toggle-label">
-                <input type="checkbox" class="bingo-board-toggle bingo-simplified-toggle" />
-                <span>Simplified Board</span>
+                <input type="checkbox" class="bingo-board-toggle bingo-detailed-toggle" />
+                <span>Detailed Board</span>
               </label>
             </div>
             """,
@@ -721,8 +721,10 @@ def _render_cell_html(
         f"{line_html}"
         f"{claim_html}"
         '<div class="bingo-cell-top">'
+        '<div class="bingo-cell-header">'
         f'<div class="bingo-cell-song">{song}</div>'
         f'<div class="bingo-cell-diff">{difficulty}</div>'
+        "</div>"
         "</div>"
         f'<div class="bingo-cell-mid">{_leader_block_html(standing)}</div>'
         f'<div class="bingo-cell-bot">{_trailers_block_html(standing)}</div>'
@@ -784,29 +786,72 @@ def build_bingo_board_css() -> str:
     [data-testid="stAppViewContainer"]:has(.bingo-lines-toggle:checked) .bingo-line-svg {{
         display: none !important;
     }}
-    [data-testid="stAppViewContainer"]:has(.bingo-simplified-toggle:checked) .bingo-cell-mid,
-    [data-testid="stAppViewContainer"]:has(.bingo-simplified-toggle:checked) .bingo-cell-bot {{
-        display: none !important;
+    [data-testid="stAppViewContainer"]:not(:has(.bingo-detailed-toggle:checked)) .bingo-cell-mid,
+    [data-testid="stAppViewContainer"]:not(:has(.bingo-detailed-toggle:checked)) .bingo-cell-bot {{
+        overflow: hidden;
+        min-height: 0;
+        opacity: 0;
+        transform: translateY(-0.35rem);
+        transition: opacity 0.22s ease, transform 0.22s ease;
     }}
-    [data-testid="stAppViewContainer"]:has(.bingo-simplified-toggle:checked) .bingo-cell {{
-        justify-content: center;
-        align-items: center;
+    [data-testid="stAppViewContainer"]:not(:has(.bingo-detailed-toggle:checked)) .bingo-cell {{
+        cursor: pointer;
+        grid-template-rows: 1fr 0fr 0fr;
+        place-items: stretch;
+        transition: grid-template-rows 0.28s ease;
     }}
-    [data-testid="stAppViewContainer"]:has(.bingo-simplified-toggle:checked) .bingo-cell-top {{
-        padding-bottom: 0;
-        display: flex;
-        flex-direction: column;
-        justify-content: center;
-        align-items: center;
-        flex: 1 1 auto;
+    [data-testid="stAppViewContainer"]:not(:has(.bingo-detailed-toggle:checked)) .bingo-cell-top {{
+        position: relative;
+        min-height: 0;
+        height: 100%;
         width: 100%;
     }}
-    [data-testid="stAppViewContainer"]:has(.bingo-simplified-toggle:checked) .bingo-cell-song {{
-        font-size: 1.05rem;
+    [data-testid="stAppViewContainer"]:not(:has(.bingo-detailed-toggle:checked)) .bingo-cell-header {{
+        position: absolute;
+        left: 0;
+        right: 0;
+        width: 100%;
+        top: 50%;
+        transform: translateY(-50%);
+        transition: top 0.28s ease, transform 0.28s ease;
+        will-change: top, transform;
     }}
-    [data-testid="stAppViewContainer"]:has(.bingo-simplified-toggle:checked) .bingo-cell-diff {{
+    [data-testid="stAppViewContainer"]:not(:has(.bingo-detailed-toggle:checked)) .bingo-cell-song {{
+        font-size: 1.05rem;
+        min-height: unset;
+        -webkit-line-clamp: unset;
+        transition: font-size 0.28s ease;
+    }}
+    [data-testid="stAppViewContainer"]:not(:has(.bingo-detailed-toggle:checked)) .bingo-cell-diff {{
         font-size: 0.95rem;
         margin-top: 0.25rem;
+        transition: font-size 0.28s ease, margin-top 0.28s ease;
+    }}
+    [data-testid="stAppViewContainer"]:not(:has(.bingo-detailed-toggle:checked)) .bingo-cell:hover {{
+        z-index: 6;
+        grid-template-rows: minmax(3.5rem, auto) minmax(4.25rem, 1fr) minmax(2.15rem, auto);
+    }}
+    [data-testid="stAppViewContainer"]:not(:has(.bingo-detailed-toggle:checked)) .bingo-cell:hover .bingo-cell-mid,
+    [data-testid="stAppViewContainer"]:not(:has(.bingo-detailed-toggle:checked)) .bingo-cell:hover .bingo-cell-bot {{
+        opacity: 1;
+        transform: translateY(0);
+        transition-delay: 0.05s;
+    }}
+    [data-testid="stAppViewContainer"]:not(:has(.bingo-detailed-toggle:checked)) .bingo-cell:hover .bingo-cell-top {{
+        min-height: 3.5rem;
+        height: auto;
+    }}
+    [data-testid="stAppViewContainer"]:not(:has(.bingo-detailed-toggle:checked)) .bingo-cell:hover .bingo-cell-header {{
+        top: 0;
+        transform: translateY(0);
+    }}
+    [data-testid="stAppViewContainer"]:not(:has(.bingo-detailed-toggle:checked)) .bingo-cell:hover .bingo-cell-song {{
+        font-size: 0.95rem;
+        -webkit-line-clamp: 2;
+    }}
+    [data-testid="stAppViewContainer"]:not(:has(.bingo-detailed-toggle:checked)) .bingo-cell:hover .bingo-cell-diff {{
+        font-size: 0.88rem;
+        margin-top: 0.1rem;
     }}
     .bingo-board-wrap {{
         width: 100%;
@@ -831,9 +876,9 @@ def build_bingo_board_css() -> str:
         padding: 0.6rem 0.4rem 0.55rem;
         min-height: 12.75rem;
         height: 100%;
-        display: flex;
-        flex-direction: column;
-        justify-content: space-between;
+        display: grid;
+        grid-template-rows: minmax(3.5rem, auto) minmax(4.25rem, 1fr) minmax(2.15rem, auto);
+        align-content: stretch;
         box-sizing: border-box;
         border: none;
         overflow: hidden;
@@ -861,21 +906,32 @@ def build_bingo_board_css() -> str:
         position: relative;
         z-index: 4;
         background: transparent;
-        padding-bottom: 3.55rem;
+        min-height: 3.5rem;
+        display: flex;
+        flex-direction: column;
+        justify-content: flex-start;
+        align-items: center;
+    }}
+    .bingo-cell-header {{
+        width: 100%;
     }}
     .bingo-cell-bot {{
         position: relative;
         z-index: 4;
         background: transparent;
-        padding-top: 3.55rem;
-    }}
-    .bingo-cell-mid {{
-        position: absolute;
-        inset: 0;
+        min-height: 2.15rem;
         display: flex;
         flex-direction: column;
-        justify-content: center;
+        justify-content: flex-end;
+    }}
+    .bingo-cell-mid {{
+        position: relative;
+        display: flex;
+        flex-direction: column;
+        justify-content: flex-start;
         align-items: center;
+        min-height: 4.25rem;
+        padding-top: 0.15rem;
         z-index: 4;
         pointer-events: none;
         background: transparent;
@@ -886,6 +942,10 @@ def build_bingo_board_css() -> str:
         line-height: 1.15;
         width: 100%;
         color: #eaeaea;
+        display: -webkit-box;
+        -webkit-box-orient: vertical;
+        -webkit-line-clamp: 2;
+        overflow: hidden;
     }}
     .bingo-cell-diff {{
         font-size: 0.88rem;
@@ -932,6 +992,7 @@ def build_bingo_board_css() -> str:
         width: 100%;
         border-top: 1px solid rgba(234, 234, 234, 0.28);
         padding-top: 0.2rem;
+        box-sizing: border-box;
     }}
     .bingo-cell-trailer {{
         flex: 1 1 0;
@@ -949,12 +1010,16 @@ def build_bingo_board_css() -> str:
         .bingo-cell {{
             min-height: 11.25rem;
             padding: 0.45rem 0.25rem 0.4rem;
+            grid-template-rows: minmax(3.1rem, auto) minmax(3.75rem, 1fr) minmax(2rem, auto);
         }}
         .bingo-cell-top {{
-            padding-bottom: 3rem;
+            min-height: 3.1rem;
         }}
         .bingo-cell-bot {{
-            padding-top: 3rem;
+            min-height: 2rem;
+        }}
+        .bingo-cell-mid {{
+            min-height: 3.75rem;
         }}
         .bingo-cell-song {{
             font-size: 0.8rem;
@@ -970,6 +1035,22 @@ def build_bingo_board_css() -> str:
         }}
         .bingo-cell-trailer {{
             font-size: 0.9rem;
+        }}
+        [data-testid="stAppViewContainer"]:not(:has(.bingo-detailed-toggle:checked)) .bingo-cell {{
+            grid-template-rows: 1fr 0fr 0fr;
+        }}
+        [data-testid="stAppViewContainer"]:not(:has(.bingo-detailed-toggle:checked)) .bingo-cell:hover {{
+            grid-template-rows: minmax(3.1rem, auto) minmax(3.75rem, 1fr) minmax(2rem, auto);
+        }}
+        [data-testid="stAppViewContainer"]:not(:has(.bingo-detailed-toggle:checked)) .bingo-cell:hover .bingo-cell-top {{
+            min-height: 3.1rem;
+        }}
+        [data-testid="stAppViewContainer"]:not(:has(.bingo-detailed-toggle:checked)) .bingo-cell:hover .bingo-cell-song {{
+            font-size: 0.8rem;
+            -webkit-line-clamp: 2;
+        }}
+        [data-testid="stAppViewContainer"]:not(:has(.bingo-detailed-toggle:checked)) .bingo-cell:hover .bingo-cell-diff {{
+            font-size: 0.74rem;
         }}
     }}
     </style>
