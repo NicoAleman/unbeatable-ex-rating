@@ -16,7 +16,9 @@ from rating.bingo import (
     BingoSettings,
     BingoTeamPlayer,
     TEAM_ORDER,
+    bingo_day_end,
     build_cell_standing,
+    completed_bingo_days,
     compute_bingo_scoreboard,
     find_bingo_runs,
     format_leader_score,
@@ -72,9 +74,17 @@ def _cached_bingo_teams():
 
 def _on_bingo_refresh() -> None:
     """Mark a manual refresh; scores always load live on each run."""
-    st.session_state.bingo_last_updated = time.time()
+    _touch_bingo_live_updated()
     _cached_bingo_charts.clear()
     _cached_bingo_teams.clear()
+
+
+def _touch_bingo_live_updated() -> None:
+    """Reset the Live toolbar clock whenever live board data is (re)shown."""
+    st.session_state.bingo_last_updated = time.time()
+    st.session_state.bingo_live_updated_nonce = (
+        int(st.session_state.get("bingo_live_updated_nonce", 0)) + 1
+    )
 
 
 def _difficulty_label(difficulty: str, level: int | None) -> str:
@@ -110,10 +120,11 @@ def _format_bingo_updated_ago(updated_at: float, *, now: float | None = None) ->
     return f"{hours} {unit} ago"
 
 
-def _render_bingo_board_toolbar() -> None:
+def _render_bingo_board_toolbar(*, show_refresh: bool = True) -> None:
     if "bingo_last_updated" not in st.session_state:
-        st.session_state.bingo_last_updated = time.time()
+        _touch_bingo_live_updated()
     updated_ms = int(float(st.session_state.bingo_last_updated) * 1000)
+    updated_nonce = int(st.session_state.get("bingo_live_updated_nonce", 0))
 
     st.markdown(
         """
@@ -225,16 +236,14 @@ def _render_bingo_board_toolbar() -> None:
             width: 1.15rem !important;
             height: 1.15rem !important;
         }
-        .st-key-bingo_last_updated,
-        .st-key-bingo-last-updated {
+        [class*="st-key-bingo_last_updated"] {
             width: auto !important;
             min-width: 0 !important;
             flex: 1 1 auto !important;
             padding: 0 !important;
             margin: 0 !important;
         }
-        .st-key-bingo_last_updated iframe,
-        .st-key-bingo-last-updated iframe {
+        [class*="st-key-bingo_last_updated"] iframe {
             width: min(100%, 360px) !important;
             max-width: 360px !important;
             height: 1.7rem !important;
@@ -256,65 +265,68 @@ def _render_bingo_board_toolbar() -> None:
             unsafe_allow_html=True,
         )
         with st.container(horizontal=True, gap="xsmall", key="bingo_refresh_row"):
-            st.button(
-                "",
-                key="bingo_refresh_board",
-                type="primary",
-                icon=":material/refresh:",
-                help="Refresh board",
-                on_click=_on_bingo_refresh,
-            )
-            with st.container(key="bingo_last_updated"):
-                components.html(
-                    f"""
-                    <div class="bingo-last-updated" id="bingo-last-updated"></div>
-                    <style>
-                      html, body {{
-                        margin: 0;
-                        padding: 0;
-                        background: transparent !important;
-                        overflow: visible;
-                      }}
-                      .bingo-last-updated {{
-                        display: flex;
-                        align-items: center;
-                        height: 1.7rem;
-                        font-family: "Source Sans Pro", "Segoe UI", sans-serif;
-                        font-size: 1.15rem;
-                        font-weight: 600;
-                        color: rgba(200, 205, 215, 0.88);
-                        white-space: nowrap;
-                        overflow: visible;
-                      }}
-                    </style>
-                    <script>
-                      const updatedMs = {updated_ms};
-                      const labelEl = document.getElementById("bingo-last-updated");
-                      function formatAgo(ms) {{
-                        const seconds = Math.max(0, Math.floor((Date.now() - ms) / 1000));
-                        if (seconds < 30) {{
-                          return "seconds ago";
-                        }}
-                        if (seconds < 60) {{
-                          return "30 seconds ago";
-                        }}
-                        const minutes = Math.floor(seconds / 60);
-                        if (minutes < 60) {{
-                          return minutes === 1 ? "1 minute ago" : minutes + " minutes ago";
-                        }}
-                        const hours = Math.floor(minutes / 60);
-                        return hours === 1 ? "1 hour ago" : hours + " hours ago";
-                      }}
-                      function tick() {{
-                        labelEl.textContent = "Last Updated " + formatAgo(updatedMs);
-                      }}
-                      tick();
-                      setInterval(tick, 1000);
-                    </script>
-                    """,
-                    height=28,
-                    width=360,
+            if show_refresh:
+                st.button(
+                    "",
+                    key="bingo_refresh_board",
+                    type="primary",
+                    icon=":material/refresh:",
+                    help="Refresh board",
+                    on_click=_on_bingo_refresh,
                 )
+                # Dynamic key forces a fresh iframe; components.html often keeps
+                # a stale script (old updatedMs) when only the HTML string changes.
+                with st.container(key=f"bingo_last_updated_{updated_nonce}_{updated_ms}"):
+                    components.html(
+                        f"""
+                        <div class="bingo-last-updated" id="bingo-last-updated"></div>
+                        <style>
+                          html, body {{
+                            margin: 0;
+                            padding: 0;
+                            background: transparent !important;
+                            overflow: visible;
+                          }}
+                          .bingo-last-updated {{
+                            display: flex;
+                            align-items: center;
+                            height: 1.7rem;
+                            font-family: "Source Sans Pro", "Segoe UI", sans-serif;
+                            font-size: 1.15rem;
+                            font-weight: 600;
+                            color: rgba(200, 205, 215, 0.88);
+                            white-space: nowrap;
+                            overflow: visible;
+                          }}
+                        </style>
+                        <script>
+                          const updatedMs = {updated_ms};
+                          const labelEl = document.getElementById("bingo-last-updated");
+                          function formatAgo(ms) {{
+                            const seconds = Math.max(0, Math.floor((Date.now() - ms) / 1000));
+                            if (seconds < 30) {{
+                              return "seconds ago";
+                            }}
+                            if (seconds < 60) {{
+                              return "30 seconds ago";
+                            }}
+                            const minutes = Math.floor(seconds / 60);
+                            if (minutes < 60) {{
+                              return minutes === 1 ? "1 minute ago" : minutes + " minutes ago";
+                            }}
+                            const hours = Math.floor(minutes / 60);
+                            return hours === 1 ? "1 hour ago" : hours + " hours ago";
+                          }}
+                          function tick() {{
+                            labelEl.textContent = "Last Updated " + formatAgo(updatedMs);
+                          }}
+                          tick();
+                          setInterval(tick, 1000);
+                        </script>
+                        """,
+                        height=28,
+                        width=360,
+                    )
     with right:
         st.markdown(
             """
@@ -930,13 +942,49 @@ def build_bingo_board_css() -> str:
     """
 
 
+def _inject_scoreboard_day_highlight(highlight_day: int | None) -> None:
+    """Update scoreboard column highlight via CSS only (table itself stays mounted)."""
+    if highlight_day is None:
+        rule = ""
+    else:
+        day = int(highlight_day)
+        rule = f"""
+        .bingo-scoreboard [data-day="{day}"] {{
+          box-shadow: inset 0 0 0 2px rgba(234, 234, 234, 0.55) !important;
+          background-image: linear-gradient(
+            rgba(255, 255, 255, 0.07),
+            rgba(255, 255, 255, 0.07)
+          ) !important;
+        }}
+        .bingo-scoreboard thead th[data-day="{day}"] {{
+          color: #ffffff !important;
+          font-weight: 800 !important;
+        }}
+        """
+    st.markdown(
+        f"""
+        <style>
+        .bingo-scoreboard [data-day] {{
+          box-shadow: none !important;
+          background-image: none !important;
+        }}
+        .bingo-scoreboard thead th[data-day] {{
+          color: rgba(234, 234, 234, 0.88) !important;
+          font-weight: 700 !important;
+        }}
+        {rule}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def _render_bingo_scoreboard(scoreboard: BingoScoreboard) -> None:
-    day_headers = "".join(
-        f'<th class="bingo-sb-day" scope="col">{day}</th>'
+    day_headers_html = "".join(
+        f'<th class="bingo-sb-day" data-day="{day}" scope="col">{day}</th>'
         for day in range(1, scoreboard.day_count + 1)
     )
     rows_html: list[str] = []
-    # Slightly dimmer than board cell tints so the scoreboard stays subdued.
     scoreboard_row_bg = {
         "Eve": "#0c1528",
         "Grace": "#1a1016",
@@ -946,14 +994,17 @@ def _render_bingo_scoreboard(scoreboard: BingoScoreboard) -> None:
         color = TEAM_TEXT_COLORS.get(team, "#eaeaea")
         row_bg = scoreboard_row_bg.get(team, BINGO_CELL_BG)
         cells = []
-        for value in scoreboard.daily_points.get(team, []):
+        for day_index, value in enumerate(scoreboard.daily_points.get(team, [])):
+            day = day_index + 1
             if value is None:
                 cells.append(
-                    f'<td class="bingo-sb-score bingo-sb-blank" style="background:{row_bg};"></td>'
+                    f'<td class="bingo-sb-score bingo-sb-blank" data-day="{day}" '
+                    f'style="background:{row_bg};"></td>'
                 )
             else:
                 cells.append(
-                    f'<td class="bingo-sb-score" style="background:{row_bg};">'
+                    f'<td class="bingo-sb-score" data-day="{day}" '
+                    f'style="background:{row_bg};">'
                     f"{html.escape(str(value))}</td>"
                 )
         total = int(scoreboard.totals.get(team, 0))
@@ -1106,9 +1157,9 @@ def _render_bingo_scoreboard(scoreboard: BingoScoreboard) -> None:
             <table class="bingo-scoreboard" aria-label="Bingo daily points scoreboard">
               <thead>
                 <tr>
-                  <th class="bingo-sb-team bingo-sb-day-label" scope="col">Day</th>
-                  {day_headers}
-                  <th class="bingo-sb-runs" scope="col">TOTAL</th>
+                <th class="bingo-sb-team bingo-sb-day-label" scope="col">Day</th>
+                {day_headers_html}
+                <th class="bingo-sb-runs" scope="col">TOTAL</th>
                 </tr>
               </thead>
               <tbody>
@@ -1228,34 +1279,325 @@ def _render_bingo_teams(teams: dict[str, list[BingoTeamPlayer]]) -> None:
     )
 
 
-def render_bingo_board() -> None:
-    if not supabase_configured():
-        st.warning("Supabase is not configured, so the Bingo board cannot load.")
-        return
-
-    if "bingo_last_updated" not in st.session_state:
-        st.session_state.bingo_last_updated = time.time()
-
+def _bingo_view_day_from_label(
+    label: str | None,
+    *,
+    day_count: int,
+) -> int | None:
+    if label is None or label == "Live":
+        return None
+    if label == "Final":
+        return int(day_count)
     try:
-        settings = load_bingo_settings()
-        charts = _cached_bingo_charts()
-        teams = _cached_bingo_teams()
-    except Exception as exc:
-        st.error(f"Failed to load Bingo data: {exc}")
-        return
+        return int(str(label).removeprefix("Day ").strip())
+    except ValueError:
+        return None
 
-    if settings is None:
-        st.warning("Bingo settings are not available yet.")
-        return
 
-    _render_bingo_header(settings)
+def _bingo_view_label(
+    view_day: int | None,
+    *,
+    day_count: int,
+    completed_days: int,
+) -> str:
+    if view_day is None:
+        return "Live"
+    if int(view_day) == int(day_count) and completed_days >= day_count:
+        return "Final"
+    return f"Day {int(view_day)}"
 
-    if not charts:
-        st.warning("No Bingo charts are configured yet.")
-        return
+
+def _bingo_view_options(*, completed_days: int, day_count: int) -> list[str]:
+    """Labels for the board-view selector."""
+    if completed_days < 1:
+        return []
+    game_over = completed_days >= day_count
+    day_labels: list[str] = []
+    for day in range(1, completed_days + 1):
+        if day == day_count:
+            day_labels.append("Final")
+        else:
+            day_labels.append(f"Day {day}")
+    if game_over:
+        return day_labels
+    return ["Live", *day_labels]
+
+
+def _on_bingo_return_live() -> None:
+    """Match tapping Live on the day selector (runs before widgets instantiate)."""
+    st.session_state.bingo_view_day = None
+    st.session_state.bingo_board_view_control = "Live"
+    _touch_bingo_live_updated()
+
+
+def _render_bingo_historical_banner(
+    view_day: int,
+    *,
+    day_count: int,
+    show_live_button: bool,
+) -> None:
+    day_text = (
+        "Final"
+        if int(view_day) == int(day_count)
+        else f"Day {int(view_day)}"
+    )
+    st.markdown(
+        """
+        <style>
+        div[data-testid="stElementContainer"]:has(.st-key-bingo_live_banner_row),
+        div[data-testid="stElementContainer"]:has(.st-key-bingo-live-banner-row) {
+            width: 100% !important;
+            display: flex !important;
+            justify-content: center !important;
+        }
+        .st-key-bingo_live_banner_row,
+        .st-key-bingo-live-banner-row {
+            width: fit-content !important;
+            max-width: min(100%, 1100px) !important;
+            margin: 0 auto 0.75rem !important;
+        }
+        .st-key-bingo_live_banner_row [data-testid="stVerticalBlock"],
+        .st-key-bingo-live-banner-row [data-testid="stVerticalBlock"] {
+            width: 100% !important;
+            gap: 0.9rem !important;
+            align-items: center !important;
+        }
+        .st-key-bingo_live_banner_row [data-testid="stElementContainer"],
+        .st-key-bingo-live-banner-row [data-testid="stElementContainer"] {
+            margin: 0 auto !important;
+            padding: 0 !important;
+            width: fit-content !important;
+            display: flex !important;
+            justify-content: center !important;
+        }
+        .bingo-historical-banner {
+            display: block;
+            font-family: "Source Sans Pro", "Segoe UI", sans-serif;
+            font-size: 1.55rem;
+            font-weight: 800;
+            color: rgba(234, 234, 234, 0.95);
+            line-height: 1.3;
+            white-space: nowrap;
+            text-align: center;
+            margin: 0;
+            padding: 0;
+        }
+        .bingo-historical-banner span {
+            color: #6eb0ff;
+        }
+        .bingo-live-return-marker { display: none; }
+        .st-key-bingo_return_live,
+        .st-key-bingo-return-live {
+            width: fit-content !important;
+            flex: 0 0 auto !important;
+            margin: 0 auto !important;
+        }
+        .st-key-bingo_return_live [data-testid="stButton"],
+        .st-key-bingo-return-live [data-testid="stButton"] {
+            width: auto !important;
+        }
+        .st-key-bingo_return_live button,
+        .st-key-bingo-return-live button {
+            background-color: #008f68 !important;
+            border-color: #008f68 !important;
+            color: #ffffff !important;
+            font-weight: 700 !important;
+            width: auto !important;
+            min-width: 0 !important;
+            padding: 0.4rem 0.9rem !important;
+            white-space: nowrap !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+    banner_html = (
+        f'Viewing <span>{html.escape(day_text)}</span> Board'
+        if day_text == "Final"
+        else f'Viewing board at end of <span>{html.escape(day_text)}</span>'
+    )
+    with st.container(key="bingo_live_banner_row"):
+        st.markdown(
+            f'<div class="bingo-historical-banner">{banner_html}</div>'
+            '<span class="bingo-live-return-marker"></span>',
+            unsafe_allow_html=True,
+        )
+        if show_live_button:
+            st.markdown(
+                '<div style="height:0.65rem;" aria-hidden="true"></div>',
+                unsafe_allow_html=True,
+            )
+            st.button(
+                "Back to Live Board",
+                key="bingo_return_live",
+                type="primary",
+                on_click=_on_bingo_return_live,
+            )
+
+
+def _resolve_bingo_view_day(
+    completed_days: int,
+    *,
+    day_count: int,
+) -> int | None:
+    """Read the current day-view selection from session state (before rendering widgets)."""
+    if completed_days < 1:
+        st.session_state.bingo_view_day = None
+        return None
+
+    options = _bingo_view_options(
+        completed_days=completed_days, day_count=day_count
+    )
+    default_label = options[-1] if completed_days >= day_count else "Live"
+    label = st.session_state.get("bingo_board_view_control", default_label)
+    if label not in options:
+        label = default_label
+        st.session_state.bingo_board_view_control = default_label
+    view_day = _bingo_view_day_from_label(label, day_count=day_count)
+    st.session_state.bingo_view_day = view_day
+    return view_day
+
+
+def _render_bingo_day_view_controls(
+    completed_days: int,
+    *,
+    day_count: int,
+) -> int | None:
+    """Selector for live / day snapshots. Hidden until at least one day is complete."""
+    if completed_days < 1:
+        st.session_state.bingo_view_day = None
+        return None
+
+    options = _bingo_view_options(
+        completed_days=completed_days, day_count=day_count
+    )
+    current_day = st.session_state.get("bingo_view_day")
+    if current_day is not None:
+        try:
+            current_day = int(current_day)
+        except (TypeError, ValueError):
+            current_day = None
+    if current_day is not None and not (1 <= current_day <= completed_days):
+        current_day = None
+        st.session_state.bingo_view_day = None
+
+    default_label = _bingo_view_label(
+        current_day,
+        day_count=day_count,
+        completed_days=completed_days,
+    )
+    if default_label not in options:
+        default_label = options[-1] if completed_days >= day_count else "Live"
+    if "bingo_board_view_control" not in st.session_state:
+        st.session_state.bingo_board_view_control = default_label
+    elif st.session_state.bingo_board_view_control not in options:
+        st.session_state.bingo_board_view_control = default_label
+
+    st.markdown(
+        """
+        <style>
+        .st-key-bingo_view_controls_row,
+        .st-key-bingo-view-controls-row {
+            width: min(100%, 1100px) !important;
+            margin: 0.75rem auto 0.35rem !important;
+            display: flex !important;
+            justify-content: center !important;
+        }
+        .st-key-bingo_view_controls_row [data-testid="stHorizontalBlock"],
+        .st-key-bingo-view-controls-row [data-testid="stHorizontalBlock"] {
+            width: auto !important;
+            max-width: 100% !important;
+            justify-content: center !important;
+            align-items: center !important;
+            gap: 0.55rem !important;
+        }
+        .bingo-board-view-label {
+            font-family: "Source Sans Pro", "Segoe UI", sans-serif;
+            font-size: 1.28rem;
+            font-weight: 700;
+            letter-spacing: 0.03em;
+            color: rgba(234, 234, 234, 0.88);
+            white-space: nowrap;
+            line-height: 1.2;
+            position: relative;
+            z-index: 2;
+        }
+        .st-key-bingo_board_view_control,
+        .st-key-bingo-board-view-control {
+            width: fit-content !important;
+            margin: 0 3.25rem 0 0 !important;
+            display: flex !important;
+            justify-content: center !important;
+            transform: scale(1.18);
+            transform-origin: left center;
+            position: relative;
+            z-index: 1;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+    with st.container(
+        horizontal=True,
+        horizontal_alignment="center",
+        gap="small",
+        key="bingo_view_controls_row",
+    ):
+        st.markdown(
+            '<div class="bingo-board-view-label">Board View:</div>',
+            unsafe_allow_html=True,
+        )
+        selection = st.segmented_control(
+            "Board view",
+            options=options,
+            key="bingo_board_view_control",
+            label_visibility="collapsed",
+        )
+    view_day = _bingo_view_day_from_label(selection, day_count=day_count)
+    st.session_state.bingo_view_day = view_day
+    return view_day
+
+
+@st.fragment
+def _render_bingo_board_fragment(
+    *,
+    settings: BingoSettings,
+    charts: list,
+    completed_days: int,
+) -> None:
+    """Board body + day selector. Reruns alone when the day view changes."""
+    day_count = max(1, int(settings.day_count or 1))
+    # Track live vs historical across runs. Do not rely on bingo_view_day alone —
+    # Back to Live clears it in on_click before this fragment runs.
+    prev_mode = st.session_state.get("bingo_board_mode", "live")
+    view_day = _resolve_bingo_view_day(completed_days, day_count=day_count)
+    mode = "historical" if view_day is not None else "live"
+    if mode == "live" and prev_mode == "historical":
+        _touch_bingo_live_updated()
+    st.session_state.bingo_board_mode = mode
+    show_live = completed_days < day_count
+
+    banner_slot = st.empty()
+    if view_day is not None:
+        with banner_slot.container():
+            _render_bingo_historical_banner(
+                view_day,
+                day_count=day_count,
+                show_live_button=show_live,
+            )
+    else:
+        banner_slot.empty()
 
     width = max(1, int(settings.board_width))
-    standings_data = load_bingo_chart_standings_data(start_time=settings.start_time)
+    end_time = (
+        bingo_day_end(settings.start_time, view_day)
+        if view_day is not None and settings.start_time is not None
+        else None
+    )
+    standings_data = load_bingo_chart_standings_data(
+        start_time=settings.start_time,
+        end_time=end_time,
+    )
     totals = {key: values[0] for key, values in standings_data.items()}
     player_bests = {key: values[1] for key, values in standings_data.items()}
     by_coord = {(chart.row, chart.column): chart for chart in charts}
@@ -1301,9 +1643,9 @@ def render_bingo_board() -> None:
                 )
             )
 
-    st.markdown(build_bingo_board_css(), unsafe_allow_html=True)
-    _render_bingo_board_toolbar()
-    st.markdown(
+    _render_bingo_board_toolbar(show_refresh=view_day is None)
+    board_slot = st.empty()
+    board_slot.markdown(
         f"""
         <div class="bingo-board-shell">
           <div class="bingo-board-wrap">
@@ -1315,11 +1657,56 @@ def render_bingo_board() -> None:
         """,
         unsafe_allow_html=True,
     )
+    _render_bingo_day_view_controls(completed_days, day_count=day_count)
+    _inject_scoreboard_day_highlight(view_day)
+
+
+def render_bingo_board() -> None:
+    if not supabase_configured():
+        st.warning("Supabase is not configured, so the Bingo board cannot load.")
+        return
+
+    if "bingo_last_updated" not in st.session_state:
+        st.session_state.bingo_last_updated = time.time()
+
+    try:
+        settings = load_bingo_settings()
+        charts = _cached_bingo_charts()
+        teams = _cached_bingo_teams()
+    except Exception as exc:
+        st.error(f"Failed to load Bingo data: {exc}")
+        return
+
+    if settings is None:
+        st.warning("Bingo settings are not available yet.")
+        return
+
+    _render_bingo_header(settings)
+
+    if not charts:
+        st.warning("No Bingo charts are configured yet.")
+        return
+
+    completed_days = 0
+    if settings.start_time is not None and settings.day_count is not None:
+        completed_days = completed_bingo_days(
+            start_time=settings.start_time,
+            day_count=int(settings.day_count),
+        )
+
+    st.markdown(build_bingo_board_css(), unsafe_allow_html=True)
+
     try:
         scoreboard = compute_bingo_scoreboard(settings=settings, charts=charts)
     except Exception as exc:
         st.error(f"Failed to load Bingo scoreboard: {exc}")
         scoreboard = None
+
+    _render_bingo_board_fragment(
+        settings=settings,
+        charts=charts,
+        completed_days=completed_days,
+    )
     if scoreboard is not None:
         _render_bingo_scoreboard(scoreboard)
     _render_bingo_teams(teams)
