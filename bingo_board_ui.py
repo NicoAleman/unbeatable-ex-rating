@@ -12,12 +12,16 @@ import streamlit.components.v1 as components
 
 from rating.bingo import (
     BingoCellStanding,
+    BingoScoreboard,
     BingoSettings,
     BingoTeamPlayer,
     TEAM_ORDER,
     build_cell_standing,
+    compute_bingo_scoreboard,
+    find_bingo_runs,
     format_leader_score,
     format_score_diff,
+    group_claim_owners,
     load_bingo_chart_standings_data,
     load_bingo_charts,
     load_bingo_settings,
@@ -57,11 +61,6 @@ TEAM_CLAIM_BORDER_WIDTH = "3px"
 
 
 @st.cache_data(ttl=120, show_spinner=False)
-def _cached_bingo_settings() -> BingoSettings | None:
-    return load_bingo_settings()
-
-
-@st.cache_data(ttl=120, show_spinner=False)
 def _cached_bingo_charts():
     return load_bingo_charts()
 
@@ -74,6 +73,8 @@ def _cached_bingo_teams():
 def _on_bingo_refresh() -> None:
     """Mark a manual refresh; scores always load live on each run."""
     st.session_state.bingo_last_updated = time.time()
+    _cached_bingo_charts.clear()
+    _cached_bingo_teams.clear()
 
 
 def _difficulty_label(difficulty: str, level: int | None) -> str:
@@ -501,100 +502,13 @@ def _bingo_line_segments_by_cell(
     rows: int,
     cols: int,
 ) -> dict[tuple[int, int], list[tuple[str, str, str]]]:
-    """Map cell -> list of (orientation, team, style) for bingo / near-bingo lines.
-
-    orientation: "h" | "v" | "d" | "a"
-    style: "solid" (full bingo) | "dashed" (exactly 4 in a row)
-    Full bingos never also emit overlapping 4-cell dashed runs on the same line.
-    """
-
-    def claimed_team(coords: list[tuple[int, int]]) -> str | None:
-        if len(coords) < 2:
-            return None
-        teams = [leaders_by_coord.get(coord) for coord in coords]
-        if any(team is None for team in teams):
-            return None
-        unique = set(teams)
-        if len(unique) != 1:
-            return None
-        return next(iter(unique))
-
+    """Map cell -> list of (orientation, team, style) for bingo / near-bingo lines."""
     segments: dict[tuple[int, int], list[tuple[str, str, str]]] = {}
-    seen: set[tuple[tuple[int, int], ...]] = set()
-
-    def add_line(
-        orientation: str,
-        coords: list[tuple[int, int]],
-        team: str,
-        style: str,
-    ) -> None:
-        key = tuple(coords)
-        if key in seen:
-            return
-        seen.add(key)
+    for orientation, coords, team, style in find_bingo_runs(
+        leaders_by_coord, rows=rows, cols=cols
+    ):
         for coord in coords:
             segments.setdefault(coord, []).append((orientation, team, style))
-
-    def add_runs_on_line(
-        orientation: str, coords: list[tuple[int, int]]
-    ) -> None:
-        if len(coords) < 4:
-            return
-
-        # Full-length row/col/main diagonal bingo: solid only (no dashed subsets).
-        is_full_board_line = (
-            (orientation == "h" and len(coords) == cols)
-            or (orientation == "v" and len(coords) == rows)
-            or (
-                orientation in ("d", "a")
-                and rows == cols
-                and len(coords) == rows
-            )
-        )
-        if is_full_board_line:
-            full_team = claimed_team(coords)
-            if full_team is not None:
-                add_line(orientation, coords, full_team, "solid")
-                return
-
-        for start in range(0, len(coords) - 3):
-            window = coords[start : start + 4]
-            team = claimed_team(window)
-            if team is not None:
-                add_line(orientation, window, team, "dashed")
-
-    for row in range(rows):
-        add_runs_on_line("h", [(row, col) for col in range(cols)])
-
-    for col in range(cols):
-        add_runs_on_line("v", [(row, col) for row in range(rows)])
-
-    # All down-right diagonals (main and off-center), started from top/left edges.
-    for start_row in range(rows):
-        for start_col in range(cols):
-            if start_row > 0 and start_col > 0:
-                continue
-            coords: list[tuple[int, int]] = []
-            row, col = start_row, start_col
-            while row < rows and col < cols:
-                coords.append((row, col))
-                row += 1
-                col += 1
-            add_runs_on_line("d", coords)
-
-    # All down-left diagonals (anti and off-center), started from top/right edges.
-    for start_row in range(rows):
-        for start_col in range(cols):
-            if start_row > 0 and start_col < cols - 1:
-                continue
-            coords = []
-            row, col = start_row, start_col
-            while row < rows and col >= 0:
-                coords.append((row, col))
-                row += 1
-                col -= 1
-            add_runs_on_line("a", coords)
-
     return segments
 
 
@@ -703,25 +617,7 @@ def _group_claim_owners(
     player_bests: dict,
 ) -> dict[int, str]:
     """Return {group_id: team} when that team leads every chart in the group."""
-    by_group: dict[int, list] = {}
-    for chart in charts:
-        if chart.group is None:
-            continue
-        by_group.setdefault(int(chart.group), []).append(chart)
-
-    claimed: dict[int, str] = {}
-    for group_id, group_charts in by_group.items():
-        leaders = [
-            build_cell_standing(chart, totals, player_bests).leader
-            for chart in group_charts
-        ]
-        if not leaders or any(leader is None for leader in leaders):
-            continue
-        first = leaders[0]
-        if first is not None and all(leader == first for leader in leaders):
-            claimed[group_id] = first
-    return claimed
-
+    return group_claim_owners(charts, totals, player_bests)
 
 def _claim_outline_html(
     row: int,
@@ -1034,6 +930,198 @@ def build_bingo_board_css() -> str:
     """
 
 
+def _render_bingo_scoreboard(scoreboard: BingoScoreboard) -> None:
+    day_headers = "".join(
+        f'<th class="bingo-sb-day" scope="col">{day}</th>'
+        for day in range(1, scoreboard.day_count + 1)
+    )
+    rows_html: list[str] = []
+    # Slightly dimmer than board cell tints so the scoreboard stays subdued.
+    scoreboard_row_bg = {
+        "Eve": "#0c1528",
+        "Grace": "#1a1016",
+        "Rest": "#0c1814",
+    }
+    for team in TEAM_ORDER:
+        color = TEAM_TEXT_COLORS.get(team, "#eaeaea")
+        row_bg = scoreboard_row_bg.get(team, BINGO_CELL_BG)
+        cells = []
+        for value in scoreboard.daily_points.get(team, []):
+            if value is None:
+                cells.append(
+                    f'<td class="bingo-sb-score bingo-sb-blank" style="background:{row_bg};"></td>'
+                )
+            else:
+                cells.append(
+                    f'<td class="bingo-sb-score" style="background:{row_bg};">'
+                    f"{html.escape(str(value))}</td>"
+                )
+        total = int(scoreboard.totals.get(team, 0))
+        rows_html.append(
+            "<tr>"
+            f'<th class="bingo-sb-team" scope="row" style="color:{color};background:{row_bg};">'
+            f"{html.escape(team.upper())}</th>"
+            f'{"".join(cells)}'
+            f'<td class="bingo-sb-total" style="background:{row_bg};">'
+            f"{html.escape(str(total))}</td>"
+            "</tr>"
+        )
+
+    st.markdown(
+        f"""
+        <style>
+          .bingo-scoreboard-shell {{
+            width: min(100%, 1100px);
+            margin: 1.35rem auto 0.35rem;
+            display: flex;
+            justify-content: center;
+          }}
+          div[data-testid="stMarkdownContainer"]:has(.bingo-scoreboard-shell),
+          div[data-testid="stElementContainer"]:has(.bingo-scoreboard-shell) {{
+            margin-bottom: 0 !important;
+            padding-bottom: 0 !important;
+          }}
+          div[data-testid="stMarkdownContainer"]:has(.bingo-scoreboard-shell) p {{
+            margin: 0 !important;
+            padding: 0 !important;
+            min-height: 0 !important;
+          }}
+          .bingo-scoreboard-frame {{
+            display: table;
+            max-width: 100%;
+            border: 1px solid rgba(234, 234, 234, 0.22);
+            border-radius: 10px;
+            overflow: hidden;
+            background: transparent;
+            padding: 0;
+            margin: 0;
+            line-height: normal;
+          }}
+          .bingo-scoreboard {{
+            width: max-content;
+            max-width: 100%;
+            border-collapse: separate;
+            border-spacing: 0 !important;
+            table-layout: fixed;
+            background: transparent;
+            border: none !important;
+            margin: 0 !important;
+            padding: 0 !important;
+            font-family: "Source Sans Pro", "Segoe UI", sans-serif;
+            color: rgba(234, 234, 234, 0.92);
+          }}
+          .bingo-scoreboard tr:last-child th,
+          .bingo-scoreboard tr:last-child td {{
+            padding-bottom: 0.55rem;
+          }}
+          .bingo-scoreboard th,
+          .bingo-scoreboard td {{
+            text-align: center;
+            vertical-align: middle;
+            padding: 0.55rem 0.2rem;
+          }}
+          .bingo-scoreboard thead th {{
+            font-size: 0.95rem;
+            font-weight: 700;
+            letter-spacing: 0.04em;
+            color: rgba(234, 234, 234, 0.88);
+            padding-top: 0.7rem;
+            padding-bottom: 0.4rem;
+            background: #080b22;
+            border-bottom: 1px solid rgba(234, 234, 234, 0.18);
+          }}
+          .bingo-sb-team {{
+            width: 6.25rem;
+            text-align: left !important;
+            padding-left: 0.85rem !important;
+            font-size: 1.05rem;
+            font-weight: 800;
+            letter-spacing: 0.03em;
+          }}
+          .bingo-scoreboard thead .bingo-sb-team {{
+            text-align: center !important;
+            padding-left: 0.2rem !important;
+            font-size: 0.95rem;
+            letter-spacing: 0.04em;
+          }}
+          .bingo-sb-day-label {{
+            color: rgba(234, 234, 234, 0.72) !important;
+            font-weight: 700 !important;
+            letter-spacing: 0.06em !important;
+          }}
+          .bingo-sb-day,
+          .bingo-sb-score,
+          .bingo-sb-runs,
+          .bingo-sb-total {{
+            width: 4.15rem;
+            min-width: 4.15rem;
+            max-width: 4.15rem;
+            box-sizing: border-box;
+          }}
+          .bingo-sb-day,
+          .bingo-sb-runs {{
+            font-size: 0.95rem;
+            font-weight: 800;
+            letter-spacing: 0.04em;
+          }}
+          .bingo-sb-runs {{
+            border-left: 1px solid rgba(234, 234, 234, 0.28);
+            letter-spacing: 0.06em;
+          }}
+          .bingo-sb-score,
+          .bingo-sb-total {{
+            font-size: 1.12rem;
+            font-weight: 800;
+            line-height: 1.15;
+            color: rgba(245, 245, 245, 0.96);
+          }}
+          .bingo-sb-blank {{
+            min-height: 1.4rem;
+          }}
+          .bingo-sb-total {{
+            border-left: 1px solid rgba(234, 234, 234, 0.28);
+          }}
+          @media (max-width: 700px) {{
+            .bingo-sb-team {{
+              width: 4.5rem;
+              padding-left: 0.4rem !important;
+              font-size: 0.85rem;
+            }}
+            .bingo-sb-day,
+            .bingo-sb-score,
+            .bingo-sb-runs,
+            .bingo-sb-total {{
+              width: 3rem;
+              min-width: 3rem;
+              max-width: 3rem;
+              font-size: 0.85rem;
+            }}
+            .bingo-scoreboard thead th {{
+              font-size: 0.75rem;
+            }}
+          }}
+        </style>
+        <div class="bingo-scoreboard-shell">
+          <div class="bingo-scoreboard-frame">
+            <table class="bingo-scoreboard" aria-label="Bingo daily points scoreboard">
+              <thead>
+                <tr>
+                  <th class="bingo-sb-team bingo-sb-day-label" scope="col">Day</th>
+                  {day_headers}
+                  <th class="bingo-sb-runs" scope="col">TOTAL</th>
+                </tr>
+              </thead>
+              <tbody>
+                {"".join(rows_html)}
+              </tbody>
+            </table>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def _render_bingo_teams(teams: dict[str, list[BingoTeamPlayer]]) -> None:
     columns: list[str] = []
     for index, team in enumerate(TEAM_ORDER):
@@ -1149,7 +1237,7 @@ def render_bingo_board() -> None:
         st.session_state.bingo_last_updated = time.time()
 
     try:
-        settings = _cached_bingo_settings()
+        settings = load_bingo_settings()
         charts = _cached_bingo_charts()
         teams = _cached_bingo_teams()
     except Exception as exc:
@@ -1227,4 +1315,11 @@ def render_bingo_board() -> None:
         """,
         unsafe_allow_html=True,
     )
+    try:
+        scoreboard = compute_bingo_scoreboard(settings=settings, charts=charts)
+    except Exception as exc:
+        st.error(f"Failed to load Bingo scoreboard: {exc}")
+        scoreboard = None
+    if scoreboard is not None:
+        _render_bingo_scoreboard(scoreboard)
     _render_bingo_teams(teams)
