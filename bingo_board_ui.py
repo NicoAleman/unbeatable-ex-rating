@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import html
 import time
+from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
@@ -12,11 +13,16 @@ import streamlit.components.v1 as components
 
 from rating.bingo import (
     BingoCellStanding,
+    BingoChart,
     BingoScoreboard,
     BingoSettings,
+    BingoSquareClaimEvent,
     BingoTeamPlayer,
     TEAM_ORDER,
+    bingo_charts_on_board,
     bingo_day_end,
+    bingo_has_started,
+    bingo_in_progress_day,
     build_cell_standing,
     completed_bingo_days,
     compute_bingo_scoreboard,
@@ -24,10 +30,14 @@ from rating.bingo import (
     format_leader_score,
     format_score_diff,
     group_claim_owners,
+    bingo_chart_max_score,
     load_bingo_chart_standings_data,
     load_bingo_charts,
+    load_bingo_player_chart_best,
     load_bingo_settings,
+    load_bingo_square_claim_feed,
     load_bingo_teams_by_ex_rating,
+    submit_bingo_score,
 )
 from rating.supabase_config import supabase_configured
 
@@ -35,6 +45,11 @@ from rating.supabase_config import supabase_configured
 BINGO_CELL_BG = "#07091a"
 BINGO_PAGE_BG = "#0c0e29"
 BINGO_DISPLAY_TZ = ZoneInfo("America/Los_Angeles")
+BINGO_PLAYER_SELECT_PLACEHOLDER = "— Select a player —"
+BINGO_CHART_SELECT_PLACEHOLDER = "— Select a chart —"
+BINGO_SEARCH_LIMIT = 50
+BINGO_ACTIVITY_FEED_LIMIT = 30
+BINGO_ACTIVITY_FEED_VISIBLE_COUNT = 6
 TEAM_CELL_BACKGROUNDS = {
     "Eve": "#0f1f3a",
     "Grace": "#2a1218",
@@ -50,6 +65,11 @@ TEAM_TEXT_COLORS = {
     "Eve": "#6eb0ff",
     "Grace": "#ff7a84",
     "Rest": "#5ee09a",
+}
+TEAM_ACTIVITY_TINTS = {
+    "Eve": "rgba(110, 176, 255, 0.11)",
+    "Grace": "rgba(255, 122, 132, 0.11)",
+    "Rest": "rgba(94, 224, 154, 0.11)",
 }
 # bingo_charts."group" → outline color (1=Yellow, 2=Cyan, 3=Purple).
 GROUP_BORDER_COLORS = {
@@ -72,11 +92,25 @@ def _cached_bingo_teams():
     return load_bingo_teams_by_ex_rating()
 
 
+@st.cache_data(ttl=60, show_spinner=False)
+def _cached_bingo_claim_feed(
+    start_time_iso: str,
+    limit: int = BINGO_ACTIVITY_FEED_LIMIT,
+):
+    start_time = datetime.fromisoformat(start_time_iso)
+    return load_bingo_square_claim_feed(
+        start_time=start_time,
+        charts=_cached_bingo_charts(),
+        limit=limit,
+    )
+
+
 def _on_bingo_refresh() -> None:
     """Mark a manual refresh; scores always load live on each run."""
     _touch_bingo_live_updated()
     _cached_bingo_charts.clear()
     _cached_bingo_teams.clear()
+    _cached_bingo_claim_feed.clear()
 
 
 def _touch_bingo_live_updated() -> None:
@@ -948,17 +982,31 @@ def _inject_scoreboard_day_highlight(highlight_day: int | None) -> None:
         rule = ""
     else:
         day = int(highlight_day)
+        edge = "rgba(234, 234, 234, 0.5)"
+        fill = (
+            "linear-gradient(rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.04))"
+        )
         rule = f"""
-        .bingo-scoreboard [data-day="{day}"] {{
-          box-shadow: inset 0 0 0 2px rgba(234, 234, 234, 0.55) !important;
-          background-image: linear-gradient(
-            rgba(255, 255, 255, 0.07),
-            rgba(255, 255, 255, 0.07)
-          ) !important;
-        }}
         .bingo-scoreboard thead th[data-day="{day}"] {{
           color: #ffffff !important;
           font-weight: 800 !important;
+          background-image: {fill} !important;
+          box-shadow:
+            inset 2px 0 0 0 {edge},
+            inset -2px 0 0 0 {edge},
+            inset 0 2px 0 0 {edge} !important;
+        }}
+        .bingo-scoreboard tbody td[data-day="{day}"] {{
+          background-image: {fill} !important;
+          box-shadow:
+            inset 2px 0 0 0 {edge},
+            inset -2px 0 0 0 {edge} !important;
+        }}
+        .bingo-scoreboard tbody tr:last-child td[data-day="{day}"] {{
+          box-shadow:
+            inset 2px 0 0 0 {edge},
+            inset -2px 0 0 0 {edge},
+            inset 0 -2px 0 0 {edge} !important;
         }}
         """
     st.markdown(
@@ -979,7 +1027,11 @@ def _inject_scoreboard_day_highlight(highlight_day: int | None) -> None:
     )
 
 
-def _render_bingo_scoreboard(scoreboard: BingoScoreboard) -> None:
+def _render_bingo_scoreboard(
+    scoreboard: BingoScoreboard,
+    *,
+    live_view: bool = True,
+) -> None:
     day_headers_html = "".join(
         f'<th class="bingo-sb-day" data-day="{day}" scope="col">{day}</th>'
         for day in range(1, scoreboard.day_count + 1)
@@ -990,16 +1042,31 @@ def _render_bingo_scoreboard(scoreboard: BingoScoreboard) -> None:
         "Grace": "#1a1016",
         "Rest": "#0c1814",
     }
+    prospective_day = scoreboard.prospective_day if live_view else None
     for team in TEAM_ORDER:
         color = TEAM_TEXT_COLORS.get(team, "#eaeaea")
         row_bg = scoreboard_row_bg.get(team, BINGO_CELL_BG)
         cells = []
         for day_index, value in enumerate(scoreboard.daily_points.get(team, [])):
             day = day_index + 1
+            is_prospective = prospective_day is not None and day == prospective_day
+            # Hide live provisional scores when browsing a past day.
+            if (
+                not live_view
+                and scoreboard.prospective_day is not None
+                and day == scoreboard.prospective_day
+            ):
+                value = None
             if value is None:
                 cells.append(
                     f'<td class="bingo-sb-score bingo-sb-blank" data-day="{day}" '
                     f'style="background:{row_bg};"></td>'
+                )
+            elif is_prospective:
+                cells.append(
+                    f'<td class="bingo-sb-score bingo-sb-prospective" data-day="{day}" '
+                    f'style="background:{row_bg};">'
+                    f"{html.escape(str(value))}</td>"
                 )
             else:
                 cells.append(
@@ -1126,6 +1193,10 @@ def _render_bingo_scoreboard(scoreboard: BingoScoreboard) -> None:
             line-height: 1.15;
             color: rgba(245, 245, 245, 0.96);
           }}
+          .bingo-sb-score.bingo-sb-prospective {{
+            color: rgba(155, 162, 175, 0.55) !important;
+            font-weight: 700 !important;
+          }}
           .bingo-sb-blank {{
             min-height: 1.4rem;
           }}
@@ -1171,6 +1242,607 @@ def _render_bingo_scoreboard(scoreboard: BingoScoreboard) -> None:
         """,
         unsafe_allow_html=True,
     )
+
+
+def _format_bingo_time_ago(value: datetime) -> str:
+    now = datetime.now(timezone.utc)
+    moment = value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+    moment = moment.astimezone(timezone.utc)
+    seconds = max(0, int((now - moment).total_seconds()))
+    if seconds < 45:
+        return "just now"
+    minutes = seconds // 60
+    if minutes < 60:
+        unit = "minute" if minutes == 1 else "minutes"
+        return f"{minutes} {unit} ago"
+    hours = minutes // 60
+    if hours < 24:
+        unit = "hour" if hours == 1 else "hours"
+        return f"{hours} {unit} ago"
+    days = hours // 24
+    if days < 7:
+        unit = "day" if days == 1 else "days"
+        return f"{days} {unit} ago"
+    return moment.astimezone(BINGO_DISPLAY_TZ).strftime("%b %d, %Y")
+
+
+def _render_bingo_claim_feed_item(event: BingoSquareClaimEvent) -> str:
+    team_color = TEAM_TEXT_COLORS.get(event.team, "#eaeaea")
+    tint = TEAM_ACTIVITY_TINTS.get(event.team, "rgba(234, 234, 234, 0.06)")
+    player = html.escape(event.player_display_name)
+    chart = html.escape(
+        f"{event.chart_display_name} [{event.difficulty.upper()}]"
+    )
+    time_ago = html.escape(_format_bingo_time_ago(event.created_at))
+    if event.prev_team is None:
+        action = f'claimed <span class="bingo-activity-chart">{chart}</span>'
+    else:
+        prev_color = TEAM_TEXT_COLORS.get(event.prev_team, "#eaeaea")
+        prev = html.escape(event.prev_team.upper())
+        action = (
+            f'took <span class="bingo-activity-chart">{chart}</span> from '
+            f'<span class="bingo-activity-team" style="color:{prev_color};">{prev}</span>'
+        )
+    badges: list[str] = []
+    if event.formed_bingo:
+        badges.append(
+            '<span class="bingo-activity-badge bingo-activity-badge--bingo">Bingo!</span>'
+        )
+    if event.formed_four:
+        badges.append(
+            '<span class="bingo-activity-badge bingo-activity-badge--four">4-in-a-Row!</span>'
+        )
+    if event.captured_group:
+        badges.append(
+            '<span class="bingo-activity-badge bingo-activity-badge--group">Group Captured!</span>'
+        )
+    badges_html = (
+        f'<span class="bingo-activity-badges">{"".join(badges)}</span>'
+        if badges
+        else ""
+    )
+    return (
+        f'<div class="bingo-activity-item" style="'
+        f"border-left-color:{team_color};"
+        f"background:linear-gradient(90deg,{tint} 0%,rgba(10,18,36,0.28) 42%,rgba(10,18,36,0.18) 100%);"
+        '">'
+        f'<span class="bingo-activity-player" style="color:{team_color};" '
+        f'title="{html.escape(event.team)}">{player}</span>'
+        f'<span class="bingo-activity-action">{action}{badges_html}</span>'
+        f'<span class="bingo-activity-time">{time_ago}</span>'
+        "</div>"
+    )
+
+
+def _render_bingo_activity_feed(*, settings: BingoSettings) -> None:
+    if not bingo_has_started(start_time=settings.start_time):
+        return
+
+    st.markdown(
+        f"""
+        <style>
+          .st-key-bingo_activity_feed,
+          .st-key-bingo-activity-feed {{
+            width: min(100%, 720px) !important;
+            max-width: 720px !important;
+            margin: 1.25rem auto 0.5rem !important;
+          }}
+          .bingo-activity-viewport {{
+            --bingo-activity-item-gap: 0.55rem;
+            --bingo-activity-item-height: 3.25rem;
+            --bingo-activity-fade-height: 1.5rem;
+            --bingo-activity-visible-items: {BINGO_ACTIVITY_FEED_VISIBLE_COUNT};
+            width: 100%;
+            position: relative;
+          }}
+          .bingo-activity-viewport--scrollable {{
+            max-height: calc(
+              var(--bingo-activity-visible-items) * var(--bingo-activity-item-height)
+              + (var(--bingo-activity-visible-items) - 1) * var(--bingo-activity-item-gap)
+            );
+            overflow-y: auto;
+            padding-right: 0.35rem;
+            scrollbar-color: rgba(245, 245, 245, 0.28) transparent;
+            scrollbar-width: thin;
+          }}
+          .bingo-activity-viewport--scrollable .bingo-activity-feed {{
+            padding-bottom: var(--bingo-activity-fade-height);
+          }}
+          .bingo-activity-viewport--scrollable::after {{
+            content: "";
+            position: sticky;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            display: block;
+            height: var(--bingo-activity-fade-height);
+            margin-top: calc(-1 * var(--bingo-activity-fade-height));
+            pointer-events: none;
+            background: linear-gradient(
+              to bottom,
+              rgba(12, 14, 41, 0) 0%,
+              rgba(12, 14, 41, 0.82) 58%,
+              #0c0e29 100%
+            );
+          }}
+          .bingo-activity-feed {{
+            display: flex;
+            flex-direction: column;
+            gap: var(--bingo-activity-item-gap);
+            width: 100%;
+          }}
+          .bingo-activity-item {{
+            display: grid;
+            grid-template-columns: minmax(5.5rem, 8.5rem) minmax(0, 1fr) auto;
+            align-items: center;
+            column-gap: 0.4rem;
+            min-height: var(--bingo-activity-item-height);
+            box-sizing: border-box;
+            padding: 0.7rem 0.9rem 0.7rem 0.85rem;
+            border-radius: 0.65rem;
+            border: 1px solid rgba(120, 190, 255, 0.14);
+            border-left: 3px solid #6eb0ff;
+          }}
+          .bingo-activity-player {{
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            min-width: 0;
+            font-weight: 800;
+            font-size: 0.95rem;
+          }}
+          .bingo-activity-team {{
+            font-weight: 800;
+            letter-spacing: 0.03em;
+            font-size: 0.95rem;
+          }}
+          .bingo-activity-action {{
+            min-width: 0;
+            color: rgba(234, 234, 234, 0.88);
+            font-size: 0.95rem;
+            line-height: 1.3;
+          }}
+          .bingo-activity-chart {{
+            color: rgba(245, 245, 245, 0.96);
+            font-weight: 700;
+          }}
+          .bingo-activity-badges {{
+            display: inline-flex;
+            flex-wrap: wrap;
+            gap: 0.3rem;
+            margin-left: 0.45rem;
+            vertical-align: middle;
+          }}
+          .bingo-activity-badge {{
+            display: inline-block;
+            padding: 0.12rem 0.4rem;
+            border-radius: 999px;
+            font-size: 0.72rem;
+            font-weight: 800;
+            letter-spacing: 0.03em;
+            line-height: 1.2;
+            white-space: nowrap;
+            vertical-align: middle;
+          }}
+          .bingo-activity-badge--bingo {{
+            color: #ffe7a3;
+            background: rgba(245, 213, 71, 0.18);
+            border: 1px solid rgba(245, 213, 71, 0.45);
+          }}
+          .bingo-activity-badge--four {{
+            color: #c9ddff;
+            background: rgba(110, 176, 255, 0.16);
+            border: 1px solid rgba(110, 176, 255, 0.4);
+          }}
+          .bingo-activity-badge--group {{
+            color: #e2c8ff;
+            background: rgba(192, 132, 252, 0.16);
+            border: 1px solid rgba(192, 132, 252, 0.42);
+          }}
+          .bingo-activity-time {{
+            color: rgba(245, 245, 245, 0.45);
+            font-size: 0.8125rem;
+            white-space: nowrap;
+            justify-self: end;
+          }}
+          .bingo-activity-empty {{
+            color: rgba(245, 245, 245, 0.55);
+            font-size: 0.925rem;
+            margin: 0;
+          }}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    with st.container(key="bingo_activity_feed"):
+        st.subheader("Activity Feed")
+        try:
+            assert settings.start_time is not None
+            events = load_bingo_square_claim_feed(
+                start_time=settings.start_time,
+                charts=_cached_bingo_charts(),
+                board_width=int(settings.board_width),
+                limit=BINGO_ACTIVITY_FEED_LIMIT,
+            )
+        except Exception as exc:
+            st.warning(f"Could not load activity feed: {exc}")
+            return
+
+        if not events:
+            st.markdown(
+                '<p class="bingo-activity-empty">'
+                "No activity yet. First team to score on a chart shows up here."
+                "</p>",
+                unsafe_allow_html=True,
+            )
+            return
+
+        items_html = "".join(_render_bingo_claim_feed_item(event) for event in events)
+        scrollable = len(events) > BINGO_ACTIVITY_FEED_VISIBLE_COUNT
+        viewport_class = (
+            "bingo-activity-viewport bingo-activity-viewport--scrollable"
+            if scrollable
+            else "bingo-activity-viewport"
+        )
+        st.markdown(
+            f'<div class="{viewport_class}">'
+            f'<div class="bingo-activity-feed">{items_html}</div>'
+            "</div>",
+            unsafe_allow_html=True,
+        )
+
+
+def _bingo_player_option_label(player: BingoTeamPlayer) -> str:
+    return f"{player.display_name} ({player.team})"
+
+
+def _bingo_chart_option_label(chart: BingoChart) -> str:
+    return f"{chart.display_name} {_difficulty_label(chart.difficulty, chart.level)}"
+
+
+def _auto_select_if_single_match(
+    *,
+    select_key: str,
+    placeholder: str,
+    matches: list[str],
+) -> None:
+    if len(matches) == 1:
+        st.session_state[select_key] = matches[0]
+    elif len(matches) == 0:
+        st.session_state[select_key] = placeholder
+
+
+def _flatten_bingo_players(
+    teams: dict[str, list[BingoTeamPlayer]],
+) -> list[BingoTeamPlayer]:
+    players: list[BingoTeamPlayer] = []
+    for team in TEAM_ORDER:
+        players.extend(teams.get(team, []))
+    return players
+
+
+def _find_bingo_player(
+    players: list[BingoTeamPlayer],
+    *,
+    option_label: str,
+) -> BingoTeamPlayer | None:
+    for player in players:
+        if _bingo_player_option_label(player) == option_label:
+            return player
+    return None
+
+
+def _find_bingo_chart(
+    charts: list[BingoChart],
+    *,
+    option_label: str,
+) -> BingoChart | None:
+    for chart in charts:
+        if _bingo_chart_option_label(chart) == option_label:
+            return chart
+    return None
+
+
+@st.fragment
+def _render_bingo_manual_submission(
+    *,
+    charts: list[BingoChart],
+    teams: dict[str, list[BingoTeamPlayer]],
+    settings: BingoSettings,
+) -> None:
+    board_charts = bingo_charts_on_board(charts, settings.board_width)
+    players = _flatten_bingo_players(teams)
+
+    st.markdown(
+        """
+        <style>
+          div[data-testid="stElementContainer"]:has(.st-key-bingo_submit_panel),
+          div[data-testid="stElementContainer"]:has(.st-key-bingo-submit-panel) {
+            width: 100% !important;
+            display: flex !important;
+            justify-content: center !important;
+          }
+          .st-key-bingo_submit_panel,
+          .st-key-bingo-submit-panel {
+            width: min(100%, 720px) !important;
+            max-width: 720px !important;
+            margin: 1.75rem auto 0.5rem !important;
+          }
+          .st-key-bingo_submit_panel [data-testid="stVerticalBlockBorderWrapper"],
+          .st-key-bingo-submit-panel [data-testid="stVerticalBlockBorderWrapper"] {
+            width: 100% !important;
+            box-sizing: border-box !important;
+            padding: 1rem 1.15rem 1.15rem !important;
+          }
+          .bingo-submit-title {
+            font-family: "Source Sans Pro", "Segoe UI", sans-serif;
+            font-size: 1.35rem;
+            font-weight: 800;
+            color: rgba(234, 234, 234, 0.95);
+            margin: 0 0 0.35rem;
+          }
+          .bingo-submit-note {
+            font-family: "Source Sans Pro", "Segoe UI", sans-serif;
+            font-size: 0.95rem;
+            color: rgba(200, 205, 215, 0.82);
+            margin: 0 0 0.85rem;
+            line-height: 1.4;
+          }
+          .bingo-submit-current {
+            font-family: "Source Sans Pro", "Segoe UI", sans-serif;
+            font-size: 1.05rem;
+            font-weight: 600;
+            color: rgba(234, 234, 234, 0.92);
+            margin: 0.35rem 0 0.75rem;
+            text-align: center;
+          }
+          .bingo-submit-current span {
+            color: #6eb0ff;
+            font-weight: 800;
+          }
+          .st-key-bingo_submit_score_input [data-testid="stNumberInput"] button,
+          .st-key-bingo-submit-score-input [data-testid="stNumberInput"] button {
+            display: none !important;
+          }
+          .st-key-bingo-submit-score-button button {
+            white-space: nowrap !important;
+          }
+          .bingo-submit-hint {
+            text-align: center;
+            font-family: "Source Sans Pro", "Segoe UI", sans-serif;
+            font-size: 0.875rem;
+            color: rgba(200, 205, 215, 0.75);
+            margin: 0.15rem 0 0.65rem;
+          }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+    with st.container(border=True, key="bingo_submit_panel"):
+        success_message = st.session_state.pop("bingo_submit_success", None)
+        if success_message:
+            st.success(success_message)
+
+        st.markdown(
+            """
+            <div class="bingo-submit-title">Submit a Score</div>
+            <div class="bingo-submit-note">
+              Please take a screenshot of the results screen in case verification is needed.
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        player_col, chart_col = st.columns(2, gap="medium")
+
+        with player_col:
+            player_search = st.text_input(
+                "Search players",
+                placeholder="Search by player name…",
+                key="bingo-submit-player-search",
+            ).strip()
+            player_needle = player_search.casefold()
+            if player_needle:
+                player_matches = [
+                    player
+                    for player in players
+                    if player_needle in player.display_name.casefold()
+                ]
+                if not player_matches:
+                    st.caption("No players match your search.")
+            else:
+                player_matches = list(players)
+            player_matches = sorted(
+                player_matches,
+                key=lambda player: player.display_name.casefold(),
+            )
+            if player_needle:
+                player_matches = player_matches[:BINGO_SEARCH_LIMIT]
+            player_options = [BINGO_PLAYER_SELECT_PLACEHOLDER] + [
+                _bingo_player_option_label(player) for player in player_matches
+            ]
+
+            if player_needle:
+                _auto_select_if_single_match(
+                    select_key="bingo-submit-player-select",
+                    placeholder=BINGO_PLAYER_SELECT_PLACEHOLDER,
+                    matches=[
+                        _bingo_player_option_label(player) for player in player_matches
+                    ],
+                )
+            selected_player_option = st.selectbox(
+                "Player",
+                options=player_options,
+                key="bingo-submit-player-select",
+                disabled=not player_matches,
+            )
+            selected_player = _find_bingo_player(
+                players,
+                option_label=selected_player_option,
+            )
+
+        with chart_col:
+            chart_search = st.text_input(
+                "Search charts",
+                placeholder="Search by song name…",
+                key="bingo-submit-chart-search",
+            ).strip()
+            chart_needle = chart_search.casefold()
+            if chart_needle:
+                chart_matches = [
+                    chart
+                    for chart in board_charts
+                    if chart_needle in chart.display_name.casefold()
+                    or chart_needle in chart.song.casefold()
+                    or chart_needle in chart.difficulty.casefold()
+                ]
+                if not chart_matches:
+                    st.caption("No board charts match your search.")
+            else:
+                chart_matches = list(board_charts)
+            chart_matches = sorted(
+                chart_matches,
+                key=lambda chart: (
+                    chart.display_name.casefold(),
+                    chart.difficulty.casefold(),
+                ),
+            )
+            if chart_needle:
+                chart_matches = chart_matches[:BINGO_SEARCH_LIMIT]
+            chart_options = [BINGO_CHART_SELECT_PLACEHOLDER] + [
+                _bingo_chart_option_label(chart) for chart in chart_matches
+            ]
+
+            if chart_needle:
+                _auto_select_if_single_match(
+                    select_key="bingo-submit-chart-select",
+                    placeholder=BINGO_CHART_SELECT_PLACEHOLDER,
+                    matches=[
+                        _bingo_chart_option_label(chart) for chart in chart_matches
+                    ],
+                )
+            selected_chart_option = st.selectbox(
+                "Chart",
+                options=chart_options,
+                key="bingo-submit-chart-select",
+                disabled=not chart_matches,
+            )
+            selected_chart = _find_bingo_chart(
+                board_charts,
+                option_label=selected_chart_option,
+            )
+
+        current_best: int | None = None
+        if selected_player is not None and selected_chart is not None:
+            try:
+                current_best = load_bingo_player_chart_best(
+                    player_id=selected_player.player_id,
+                    song=selected_chart.song,
+                    difficulty=selected_chart.difficulty,
+                    start_time=settings.start_time,
+                )
+            except Exception as exc:
+                st.error(f"Could not load current score: {exc}")
+                current_best = None
+
+        if selected_player is not None and selected_chart is not None:
+            if current_best is None:
+                st.markdown(
+                    '<div class="bingo-submit-current">Current score: '
+                    "<span>None</span></div>",
+                    unsafe_allow_html=True,
+                )
+            else:
+                st.markdown(
+                    '<div class="bingo-submit-current">Current score: '
+                    f"<span>{html.escape(format_leader_score(current_best))}</span>"
+                    "</div>",
+                    unsafe_allow_html=True,
+                )
+
+        chart_max: int | None = None
+        if selected_chart is not None:
+            chart_max = bingo_chart_max_score(
+                selected_chart.song,
+                selected_chart.difficulty,
+            )
+
+        # Side spacers keep the score field + button as a tight centered pair.
+        _left, score_col, btn_col, _right = st.columns(
+            [1.4, 2.1, 1.15, 1.4],
+            gap="small",
+            vertical_alignment="bottom",
+        )
+        with score_col:
+            with st.container(key="bingo_submit_score_input"):
+                new_score = st.number_input(
+                    "New score",
+                    min_value=0,
+                    max_value=99_999_999,
+                    step=1,
+                    format="%d",
+                    key="bingo-submit-score-input",
+                    disabled=selected_player is None or selected_chart is None,
+                )
+        score_value = int(new_score)
+        score_too_high = chart_max is not None and score_value > chart_max
+        score_not_higher = current_best is not None and score_value <= current_best
+        score_invalid = score_value <= 0 or score_too_high
+        submission_in_progress = bool(
+            st.session_state.get("bingo_submission_in_progress", False)
+        )
+        can_submit = (
+            selected_player is not None
+            and selected_chart is not None
+            and not score_invalid
+            and not score_not_higher
+            and not submission_in_progress
+            and supabase_configured()
+        )
+        with btn_col:
+            submitted = st.button(
+                "Submit score",
+                type="primary",
+                key="bingo-submit-score-button",
+                disabled=not can_submit,
+            )
+
+        if selected_player is not None and selected_chart is not None:
+            if score_too_high:
+                st.markdown(
+                    '<div class="bingo-submit-hint">Enter a valid score</div>',
+                    unsafe_allow_html=True,
+                )
+            elif score_not_higher:
+                st.markdown(
+                    '<div class="bingo-submit-hint">'
+                    f"Enter a score higher than {html.escape(format_leader_score(current_best))}."
+                    "</div>",
+                    unsafe_allow_html=True,
+                )
+
+        if (
+            submitted
+            and not submission_in_progress
+            and selected_player is not None
+            and selected_chart is not None
+        ):
+            st.session_state.bingo_pending_submission = {
+                "player_id": selected_player.player_id,
+                "song": selected_chart.song,
+                "difficulty": selected_chart.difficulty,
+                "score": score_value,
+            }
+            st.session_state.bingo_submission_in_progress = True
+            # One app rerun: spinner covers save + board/scoreboard reload.
+            st.rerun(scope="app")
+
+        submit_error = st.session_state.pop("bingo_submit_error", None)
+        if submit_error:
+            st.error(submit_error)
 
 
 def _render_bingo_teams(teams: dict[str, list[BingoTeamPlayer]]) -> None:
@@ -1658,7 +2330,36 @@ def _render_bingo_board_fragment(
         unsafe_allow_html=True,
     )
     _render_bingo_day_view_controls(completed_days, day_count=day_count)
-    _inject_scoreboard_day_highlight(view_day)
+    highlight_day = view_day
+    if highlight_day is None:
+        highlight_day = bingo_in_progress_day(
+            start_time=settings.start_time,
+            day_count=day_count,
+        )
+    _inject_scoreboard_day_highlight(highlight_day)
+
+
+def _commit_pending_bingo_submission() -> None:
+    """Persist a queued manual score; caller should wrap with a spinner."""
+    pending = st.session_state.pop("bingo_pending_submission", None)
+    if not pending:
+        st.session_state.bingo_submission_in_progress = False
+        return
+    ok, message = submit_bingo_score(
+        player_id=pending["player_id"],
+        song=pending["song"],
+        difficulty=pending["difficulty"],
+        score=int(pending["score"]),
+    )
+    st.session_state.bingo_submission_in_progress = False
+    if ok:
+        st.session_state.bingo_submit_success = message
+        _touch_bingo_live_updated()
+        _cached_bingo_charts.clear()
+        _cached_bingo_teams.clear()
+        _cached_bingo_claim_feed.clear()
+    else:
+        st.session_state.bingo_submit_error = message
 
 
 def render_bingo_board() -> None:
@@ -1669,44 +2370,67 @@ def render_bingo_board() -> None:
     if "bingo_last_updated" not in st.session_state:
         st.session_state.bingo_last_updated = time.time()
 
-    try:
-        settings = load_bingo_settings()
-        charts = _cached_bingo_charts()
-        teams = _cached_bingo_teams()
-    except Exception as exc:
-        st.error(f"Failed to load Bingo data: {exc}")
-        return
+    saving = bool(st.session_state.get("bingo_submission_in_progress"))
+    spinner = st.spinner("Saving score…") if saving else nullcontext()
+    with spinner:
+        if saving:
+            _commit_pending_bingo_submission()
 
-    if settings is None:
-        st.warning("Bingo settings are not available yet.")
-        return
+        try:
+            settings = load_bingo_settings()
+            charts = _cached_bingo_charts()
+            teams = _cached_bingo_teams()
+        except Exception as exc:
+            st.error(f"Failed to load Bingo data: {exc}")
+            return
 
-    _render_bingo_header(settings)
+        if settings is None:
+            st.warning("Bingo settings are not available yet.")
+            return
 
-    if not charts:
-        st.warning("No Bingo charts are configured yet.")
-        return
+        _render_bingo_header(settings)
 
-    completed_days = 0
-    if settings.start_time is not None and settings.day_count is not None:
-        completed_days = completed_bingo_days(
-            start_time=settings.start_time,
-            day_count=int(settings.day_count),
+        if not charts:
+            st.warning("No Bingo charts are configured yet.")
+            return
+
+        completed_days = 0
+        if settings.start_time is not None and settings.day_count is not None:
+            completed_days = completed_bingo_days(
+                start_time=settings.start_time,
+                day_count=int(settings.day_count),
+            )
+
+        st.markdown(build_bingo_board_css(), unsafe_allow_html=True)
+
+        try:
+            scoreboard = compute_bingo_scoreboard(settings=settings, charts=charts)
+        except Exception as exc:
+            st.error(f"Failed to load Bingo scoreboard: {exc}")
+            scoreboard = None
+
+        _render_bingo_board_fragment(
+            settings=settings,
+            charts=charts,
+            completed_days=completed_days,
         )
-
-    st.markdown(build_bingo_board_css(), unsafe_allow_html=True)
-
-    try:
-        scoreboard = compute_bingo_scoreboard(settings=settings, charts=charts)
-    except Exception as exc:
-        st.error(f"Failed to load Bingo scoreboard: {exc}")
-        scoreboard = None
-
-    _render_bingo_board_fragment(
-        settings=settings,
-        charts=charts,
-        completed_days=completed_days,
-    )
-    if scoreboard is not None:
-        _render_bingo_scoreboard(scoreboard)
-    _render_bingo_teams(teams)
+        if scoreboard is not None:
+            _render_bingo_scoreboard(
+                scoreboard,
+                live_view=st.session_state.get("bingo_view_day") is None,
+            )
+        _render_bingo_activity_feed(settings=settings)
+        game_is_live = (
+            bingo_in_progress_day(
+                start_time=settings.start_time,
+                day_count=settings.day_count,
+            )
+            is not None
+        )
+        if game_is_live:
+            _render_bingo_manual_submission(
+                charts=charts,
+                teams=teams,
+                settings=settings,
+            )
+        _render_bingo_teams(teams)

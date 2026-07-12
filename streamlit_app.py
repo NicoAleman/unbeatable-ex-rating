@@ -39,7 +39,7 @@ from keybind_configurator_ui import (
     build_keybind_source_loaded_css,
     build_keybind_workspace_css,
 )
-from tools_page import render_other_tools_page
+import tools_page as tools_page_module
 
 importlib.reload(data_module)
 importlib.reload(formatting_module)
@@ -51,6 +51,8 @@ importlib.reload(public_leaderboard_module)
 importlib.reload(full_ex_submissions_module)
 importlib.reload(leaderboard_activity_module)
 importlib.reload(supabase_leaderboard_module)
+importlib.reload(tools_page_module)
+from tools_page import render_other_tools_page
 
 COMPLETION_BONUS = constants_module.COMPLETION_BONUS
 DEFAULT_MAX_SCORES_PATH = constants_module.DEFAULT_MAX_SCORES_PATH

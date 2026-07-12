@@ -55,6 +55,31 @@ class BingoTeamPlayer:
     ex_rating: float
 
 
+@dataclass(frozen=True)
+class BingoSquareClaimEvent:
+    """A team taking a square that was empty or held by another team."""
+
+    song: str
+    difficulty: str
+    chart_display_name: str
+    level: int | None
+    row: int
+    column: int
+    team: str
+    prev_team: str | None
+    player_id: str
+    player_display_name: str
+    score: int
+    created_at: datetime
+    formed_bingo: bool = False
+    formed_four: bool = False
+    captured_group: bool = False
+
+    @property
+    def is_flip(self) -> bool:
+        return self.prev_team is not None
+
+
 def _connect(db_url: str | None = None):
     url = db_url or get_supabase_db_url()
     if not url:
@@ -261,6 +286,387 @@ def load_bingo_team_totals_by_chart(
     }
 
 
+def _leader_for_chart_bests(
+    player_bests: dict[str, tuple[str, int]],
+) -> str | None:
+    """player_bests maps player_id -> (team, best_score)."""
+    by_team_scores: dict[str, list[int]] = {team: [] for team in TEAM_ORDER}
+    for team, score in player_bests.values():
+        if team not in by_team_scores:
+            by_team_scores[team] = []
+        by_team_scores[team].append(int(score))
+    totals = {team: int(sum(scores)) for team, scores in by_team_scores.items()}
+    for team in TEAM_ORDER:
+        totals.setdefault(team, 0)
+        by_team_scores.setdefault(team, [])
+    return pick_leading_team(totals, by_team_scores)
+
+
+def _standings_maps_from_player_bests(
+    bests_by_chart: dict[tuple[str, str], dict[str, tuple[str, int]]],
+) -> tuple[
+    dict[tuple[str, str], dict[str, int]],
+    dict[tuple[str, str], dict[str, list[int]]],
+]:
+    totals: dict[tuple[str, str], dict[str, int]] = {}
+    player_bests: dict[tuple[str, str], dict[str, list[int]]] = {}
+    for key, players in bests_by_chart.items():
+        by_team: dict[str, list[int]] = {team: [] for team in TEAM_ORDER}
+        for team, score in players.values():
+            if team not in by_team:
+                by_team[team] = []
+            by_team[team].append(int(score))
+        for team in TEAM_ORDER:
+            by_team.setdefault(team, [])
+        totals[key] = {team: int(sum(scores)) for team, scores in by_team.items()}
+        player_bests[key] = by_team
+    return totals, player_bests
+
+
+def _leaders_by_coord_from_charts(
+    charts: list[BingoChart],
+    leaders: dict[tuple[str, str], str | None],
+) -> dict[tuple[int, int], str | None]:
+    return {
+        (int(chart.row), int(chart.column)): leaders.get((chart.song, chart.difficulty))
+        for chart in charts
+    }
+
+
+def _run_keys_for_cell(
+    runs: list[tuple[str, list[tuple[int, int]], str, str]],
+    *,
+    row: int,
+    column: int,
+    team: str,
+) -> tuple[set[tuple], set[tuple]]:
+    """Return (bingo_keys, four_keys) for runs owned by team that include the cell."""
+    cell = (int(row), int(column))
+    bingos: set[tuple] = set()
+    fours: set[tuple] = set()
+    for orientation, coords, run_team, style in runs:
+        if run_team != team or cell not in coords:
+            continue
+        key = (orientation, tuple(coords), style)
+        if style == "solid":
+            bingos.add(key)
+        elif style == "dashed":
+            fours.add(key)
+    return bingos, fours
+
+
+def load_bingo_square_claim_feed(
+    *,
+    start_time: datetime | None,
+    charts: list[BingoChart] | None = None,
+    board_width: int | None = None,
+    limit: int = 40,
+    db_url: str | None = None,
+) -> list[BingoSquareClaimEvent]:
+    """Replay bingo_scores chronologically and emit square claim / flip events.
+
+    An event is recorded when a score causes a square's leading team to change
+    from uncontested → a team, or from one team → another. Events also note
+    when that claim newly forms a bingo, 4-in-a-row, or group capture.
+    """
+    if start_time is None or limit <= 0:
+        return []
+
+    if board_width is None:
+        settings = load_bingo_settings(db_url)
+        board_width = int(settings.board_width) if settings is not None else 5
+
+    board_charts = charts if charts is not None else load_bingo_charts(db_url)
+    board_charts = bingo_charts_on_board(board_charts, int(board_width))
+    chart_by_key = {
+        (chart.song, chart.difficulty): chart for chart in board_charts
+    }
+    if not chart_by_key:
+        return []
+
+    max_row = max(chart.row for chart in board_charts)
+    max_col = max(chart.column for chart in board_charts)
+    width = max(1, int(board_width))
+    rows = max(width, max_row + 1)
+    cols = max(width, max_col + 1)
+
+    try:
+        with _connect(db_url) as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT
+                        player_id,
+                        display_name,
+                        team,
+                        song,
+                        difficulty,
+                        score,
+                        created_at
+                    FROM bingo_scores
+                    WHERE created_at >= %s
+                    ORDER BY created_at ASC, score ASC, player_id ASC
+                    """,
+                    (start_time,),
+                )
+                score_rows = cur.fetchall()
+    except psycopg2.errors.UndefinedTable:
+        return []
+
+    # chart_key -> player_id -> (team, best_score)
+    bests_by_chart: dict[tuple[str, str], dict[str, tuple[str, int]]] = {
+        key: {} for key in chart_by_key
+    }
+    leaders: dict[tuple[str, str], str | None] = {key: None for key in chart_by_key}
+    events: list[BingoSquareClaimEvent] = []
+
+    for row in score_rows:
+        key = (str(row["song"]), str(row["difficulty"]))
+        chart = chart_by_key.get(key)
+        if chart is None:
+            continue
+
+        player_id = str(row["player_id"])
+        team = str(row["team"])
+        score = int(row["score"])
+        player_bests = bests_by_chart[key]
+        previous = player_bests.get(player_id)
+        if previous is not None and score <= previous[1]:
+            continue
+
+        # Snapshot achievements before this score lands.
+        prev_coord_leaders = _leaders_by_coord_from_charts(board_charts, leaders)
+        prev_runs = find_bingo_runs(prev_coord_leaders, rows=rows, cols=cols)
+        prev_bingos, prev_fours = _run_keys_for_cell(
+            prev_runs,
+            row=chart.row,
+            column=chart.column,
+            team=team,
+        )
+        prev_totals, prev_best_lists = _standings_maps_from_player_bests(bests_by_chart)
+        prev_groups = group_claim_owners(board_charts, prev_totals, prev_best_lists)
+        prev_group_owner = (
+            prev_groups.get(int(chart.group)) if chart.group is not None else None
+        )
+
+        player_bests[player_id] = (team, score)
+        prev_leader = leaders[key]
+        new_leader = _leader_for_chart_bests(player_bests)
+        leaders[key] = new_leader
+
+        if new_leader is None or new_leader == prev_leader:
+            continue
+        # Only count when the scoring team becomes the new leader.
+        if new_leader != team:
+            continue
+
+        new_coord_leaders = _leaders_by_coord_from_charts(board_charts, leaders)
+        new_runs = find_bingo_runs(new_coord_leaders, rows=rows, cols=cols)
+        new_bingos, new_fours = _run_keys_for_cell(
+            new_runs,
+            row=chart.row,
+            column=chart.column,
+            team=team,
+        )
+        new_totals, new_best_lists = _standings_maps_from_player_bests(bests_by_chart)
+        new_groups = group_claim_owners(board_charts, new_totals, new_best_lists)
+        new_group_owner = (
+            new_groups.get(int(chart.group)) if chart.group is not None else None
+        )
+
+        created_at = row["created_at"]
+        if isinstance(created_at, datetime) and created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=timezone.utc)
+
+        events.append(
+            BingoSquareClaimEvent(
+                song=chart.song,
+                difficulty=chart.difficulty,
+                chart_display_name=chart.display_name,
+                level=chart.level,
+                row=int(chart.row),
+                column=int(chart.column),
+                team=new_leader,
+                prev_team=prev_leader,
+                player_id=player_id,
+                player_display_name=str(row["display_name"]),
+                score=score,
+                created_at=created_at,
+                formed_bingo=bool(new_bingos - prev_bingos),
+                formed_four=bool(new_fours - prev_fours),
+                captured_group=(
+                    chart.group is not None
+                    and new_group_owner == team
+                    and prev_group_owner != team
+                ),
+            )
+        )
+
+    events.reverse()
+    return events[:limit]
+
+
+def bingo_charts_on_board(
+    charts: list[BingoChart],
+    board_width: int,
+) -> list[BingoChart]:
+    """Charts inside the configured board_width × board_width grid."""
+    width = max(1, int(board_width))
+    return [
+        chart
+        for chart in charts
+        if 0 <= int(chart.row) < width and 0 <= int(chart.column) < width
+    ]
+
+
+def load_bingo_player_chart_best(
+    *,
+    player_id: str,
+    song: str,
+    difficulty: str,
+    start_time: datetime | None,
+    db_url: str | None = None,
+) -> int | None:
+    """Best bingo score for one player on one chart since competition start."""
+    if start_time is None:
+        return None
+    try:
+        with _connect(db_url) as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT MAX(score)::BIGINT AS best_score
+                    FROM bingo_scores
+                    WHERE player_id = %s
+                      AND song = %s
+                      AND difficulty = %s
+                      AND created_at >= %s
+                    """,
+                    (player_id, song, difficulty, start_time),
+                )
+                row = cur.fetchone()
+    except psycopg2.errors.UndefinedTable:
+        return None
+    if row is None or row["best_score"] is None:
+        return None
+    return int(row["best_score"])
+
+
+def submit_bingo_score(
+    *,
+    player_id: str,
+    song: str,
+    difficulty: str,
+    score: int,
+    db_url: str | None = None,
+) -> tuple[bool, str]:
+    """Insert a manual bingo score if it beats the player's current best.
+
+    Returns (success, message).
+    """
+    from rating.constants import SCORE_SOURCE_SUBMISSION
+
+    try:
+        score_value = int(score)
+    except (TypeError, ValueError):
+        return False, "Score must be a whole number."
+    if score_value <= 0:
+        return False, "Score must be greater than zero."
+
+    chart_max = bingo_chart_max_score(song, difficulty)
+    if chart_max is not None and score_value > chart_max:
+        return (
+            False,
+            f"Score cannot exceed the chart max ({format_leader_score(chart_max)}).",
+        )
+
+    settings = load_bingo_settings(db_url)
+    if settings is None:
+        return False, "Bingo settings are not available."
+    if settings.start_time is None:
+        return False, "Bingo has not started yet."
+
+    charts = bingo_charts_on_board(load_bingo_charts(db_url), settings.board_width)
+    chart = next(
+        (
+            item
+            for item in charts
+            if item.song == song and item.difficulty == difficulty
+        ),
+        None,
+    )
+    if chart is None:
+        return False, "That chart is not on the current Bingo board."
+
+    try:
+        with _connect(db_url) as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT player_id, display_name, team
+                    FROM bingo_teams
+                    WHERE player_id = %s
+                    """,
+                    (player_id,),
+                )
+                player = cur.fetchone()
+                if player is None:
+                    return False, "That player is not on a Bingo team."
+
+                cur.execute(
+                    """
+                    SELECT MAX(score)::BIGINT AS best_score
+                    FROM bingo_scores
+                    WHERE player_id = %s
+                      AND song = %s
+                      AND difficulty = %s
+                      AND created_at >= %s
+                    """,
+                    (player_id, song, difficulty, settings.start_time),
+                )
+                best_row = cur.fetchone()
+                current_best = (
+                    int(best_row["best_score"])
+                    if best_row is not None and best_row["best_score"] is not None
+                    else None
+                )
+                if current_best is not None and score_value <= current_best:
+                    return (
+                        False,
+                        f"Score must be higher than the current best "
+                        f"({format_leader_score(current_best)}).",
+                    )
+
+                cur.execute(
+                    """
+                    INSERT INTO bingo_scores (
+                        player_id, display_name, team, song, difficulty,
+                        score, source
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        player["player_id"],
+                        player["display_name"],
+                        player["team"],
+                        song,
+                        difficulty,
+                        score_value,
+                        SCORE_SOURCE_SUBMISSION,
+                    ),
+                )
+            conn.commit()
+    except psycopg2.errors.UndefinedTable:
+        return False, "Bingo tables are not available."
+    except Exception as exc:
+        return False, f"Could not save score: {exc}"
+
+    return (
+        True,
+        f"Saved {format_leader_score(score_value)} for {player['display_name']} "
+        f"on {chart.display_name}.",
+    )
+
+
 def _team_tiebreak_key(team: str, player_bests: list[int]) -> tuple:
     """Higher is better: sorted individual scores desc, then Eve > Grace > Rest."""
     scores_desc = tuple(sorted((int(score) for score in player_bests), reverse=True))
@@ -331,6 +737,19 @@ def format_leader_score(score: int) -> str:
     return f"{int(score):,}"
 
 
+def bingo_chart_max_score(song: str, difficulty: str) -> int | None:
+    """Absolute max score for a chart from ArcadeMaxScores (critical max)."""
+    from rating.constants import DEFAULT_MAX_SCORES_PATH
+    from rating.data import load_critical_max_scores
+    from rating.imported_players import resolve_max_score_chart_key
+
+    max_scores = load_critical_max_scores(DEFAULT_MAX_SCORES_PATH)
+    chart_key = resolve_max_score_chart_key(song, difficulty, max_scores)
+    if chart_key is None:
+        return None
+    return int(max_scores[chart_key])
+
+
 def format_score_diff(diff: int) -> str:
     """Trailing amount as -10,000 or -1,500,000."""
     amount = abs(int(diff))
@@ -375,6 +794,45 @@ def completed_bingo_days(
     elapsed = current - start_time
     finished = int(elapsed.total_seconds() // 86400)
     return max(0, min(int(day_count), finished))
+
+
+def bingo_in_progress_day(
+    *,
+    start_time: datetime | None,
+    day_count: int | None,
+    now: datetime | None = None,
+) -> int | None:
+    """1-based day currently underway, or None before start / after final day."""
+    if start_time is None or day_count is None:
+        return None
+    current = now or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    if current < start_time:
+        return None
+    finished = completed_bingo_days(
+        start_time=start_time,
+        day_count=int(day_count),
+        now=current,
+    )
+    total_days = max(1, int(day_count))
+    if finished >= total_days:
+        return None
+    return finished + 1
+
+
+def bingo_has_started(
+    *,
+    start_time: datetime | None,
+    now: datetime | None = None,
+) -> bool:
+    """True once the competition start time has been reached."""
+    if start_time is None:
+        return False
+    current = now or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    return current >= start_time
 
 
 def find_bingo_runs(
@@ -581,6 +1039,8 @@ class BingoScoreboard:
     # Per team: list length day_count; None means unfinished / blank.
     daily_points: dict[str, list[int | None]]
     totals: dict[str, int]
+    # In-progress day whose daily_points are provisional (shown grey); None if none.
+    prospective_day: int | None = None
 
 
 def compute_bingo_scoreboard(
@@ -598,6 +1058,11 @@ def compute_bingo_scoreboard(
 
     day_count = max(1, int(settings.day_count))
     finished = completed_bingo_days(
+        start_time=settings.start_time,
+        day_count=day_count,
+        now=now,
+    )
+    in_progress = bingo_in_progress_day(
         start_time=settings.start_time,
         day_count=day_count,
         now=now,
@@ -626,11 +1091,28 @@ def compute_bingo_scoreboard(
             daily_points[team][day - 1] = points
             totals[team] += points
 
+    if in_progress is not None:
+        live_standings = load_bingo_chart_standings_data(
+            start_time=settings.start_time,
+            end_time=None,
+            db_url=db_url,
+        )
+        live_scores = score_board_state(
+            charts=charts,
+            standings_data=live_standings,
+            board_width=int(settings.board_width),
+            day=in_progress,
+            day_count=day_count,
+        )
+        for team in TEAM_ORDER:
+            daily_points[team][in_progress - 1] = int(live_scores[team].points)
+
     return BingoScoreboard(
         day_count=day_count,
         completed_days=finished,
         daily_points=daily_points,
         totals=totals,
+        prospective_day=in_progress,
     )
 
 
@@ -640,14 +1122,15 @@ def seed_bingo_test_scores(
     score_max: int = 1_800_000,
     db_url: str | None = None,
 ) -> int:
-    """Insert one random score per player per chart at start_time + 1 hour."""
+    """Insert one random score per player per chart with times spread across day 1."""
     import random
 
     settings = load_bingo_settings(db_url)
     if settings is None or settings.start_time is None:
         raise RuntimeError("bingo_settings.start_time is required to seed scores.")
 
-    created_at = settings.start_time + timedelta(hours=1)
+    day_start = settings.start_time
+    day_span = max(1, int((bingo_day_end(day_start, 1) - day_start).total_seconds()) - 1)
     with _connect(db_url) as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
             cur.execute("SELECT player_id, display_name, team FROM bingo_teams")
@@ -661,6 +1144,9 @@ def seed_bingo_test_scores(
             rows = []
             for player in players:
                 for chart in charts:
+                    created_at = day_start + timedelta(
+                        seconds=random.randint(0, day_span)
+                    )
                     rows.append(
                         (
                             player["player_id"],
@@ -694,10 +1180,10 @@ def seed_bingo_progressive_day_scores(
     shift_start_to_past: bool = True,
     db_url: str | None = None,
 ) -> tuple[int, datetime]:
-    """Clear scores and insert rising random scores through the middle of each day.
+    """Clear scores and insert rising random scores across each competition day.
 
     Day N scores are random in [1_000_000 + (N-1)*100_000, 1_100_000 + (N-1)*100_000]
-    with created_at at the midpoint of that competition day.
+    with created_at randomized throughout that competition day.
 
     When shift_start_to_past is True, moves start_time so that ``days`` full
     competition days have completed (for scoreboard simulation).
@@ -744,9 +1230,16 @@ def seed_bingo_progressive_day_scores(
             for day in range(1, days + 1):
                 score_min = 1_000_000 + (day - 1) * 100_000
                 score_max = 1_100_000 + (day - 1) * 100_000
-                created_at = start_time + timedelta(days=day - 1, hours=12)
+                day_start = start_time + timedelta(days=day - 1)
+                day_span = max(
+                    1,
+                    int((bingo_day_end(start_time, day) - day_start).total_seconds()) - 1,
+                )
                 for player in players:
                     for chart in charts:
+                        created_at = day_start + timedelta(
+                            seconds=random.randint(0, day_span)
+                        )
                         rows.append(
                             (
                                 player["player_id"],
