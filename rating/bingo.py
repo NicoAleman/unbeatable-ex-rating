@@ -56,6 +56,14 @@ class BingoTeamPlayer:
 
 
 @dataclass(frozen=True)
+class BingoChartLeaderboardEntry:
+    player_id: str
+    display_name: str
+    team: str
+    score: int
+
+
+@dataclass(frozen=True)
 class BingoSquareClaimEvent:
     """A team taking a square that was empty or held by another team."""
 
@@ -269,6 +277,170 @@ def load_bingo_chart_standings_data(
             by_team.setdefault(team, [])
         result[key] = (totals, by_team)
     return result
+
+
+def load_bingo_chart_player_leaderboard(
+    *,
+    song: str,
+    difficulty: str,
+    start_time: datetime | None,
+    end_time: datetime | None = None,
+    db_url: str | None = None,
+) -> list[BingoChartLeaderboardEntry]:
+    """Return per-player best scores for one chart within the board time window."""
+    if start_time is None:
+        return []
+
+    try:
+        with _connect(db_url) as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+                if end_time is None:
+                    cur.execute(
+                        """
+                        SELECT
+                            player_id,
+                            display_name,
+                            team,
+                            MAX(score)::BIGINT AS best_score
+                        FROM bingo_scores
+                        WHERE song = %s
+                          AND difficulty = %s
+                          AND created_at >= %s
+                        GROUP BY player_id, display_name, team
+                        ORDER BY best_score DESC, LOWER(display_name) ASC
+                        """,
+                        (song, difficulty, start_time),
+                    )
+                else:
+                    cur.execute(
+                        """
+                        SELECT
+                            player_id,
+                            display_name,
+                            team,
+                            MAX(score)::BIGINT AS best_score
+                        FROM bingo_scores
+                        WHERE song = %s
+                          AND difficulty = %s
+                          AND created_at >= %s
+                          AND created_at < %s
+                        GROUP BY player_id, display_name, team
+                        ORDER BY best_score DESC, LOWER(display_name) ASC
+                        """,
+                        (song, difficulty, start_time, end_time),
+                    )
+                rows = cur.fetchall()
+    except psycopg2.errors.UndefinedTable:
+        return []
+
+    return [
+        BingoChartLeaderboardEntry(
+            player_id=str(row["player_id"]),
+            display_name=str(row["display_name"]),
+            team=str(row["team"]),
+            score=int(row["best_score"]),
+        )
+        for row in rows
+    ]
+
+
+def load_all_bingo_chart_player_leaderboards(
+    *,
+    start_time: datetime | None,
+    end_time: datetime | None = None,
+    db_url: str | None = None,
+) -> dict[tuple[str, str], list[BingoChartLeaderboardEntry]]:
+    """Return {(song, difficulty): [player entries]} for the board time window."""
+    if start_time is None:
+        return {}
+
+    try:
+        with _connect(db_url) as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+                if end_time is None:
+                    cur.execute(
+                        """
+                        SELECT
+                            song,
+                            difficulty,
+                            player_id,
+                            display_name,
+                            team,
+                            MAX(score)::BIGINT AS best_score
+                        FROM bingo_scores
+                        WHERE created_at >= %s
+                        GROUP BY song, difficulty, player_id, display_name, team
+                        ORDER BY song, difficulty, best_score DESC, LOWER(display_name) ASC
+                        """,
+                        (start_time,),
+                    )
+                else:
+                    cur.execute(
+                        """
+                        SELECT
+                            song,
+                            difficulty,
+                            player_id,
+                            display_name,
+                            team,
+                            MAX(score)::BIGINT AS best_score
+                        FROM bingo_scores
+                        WHERE created_at >= %s
+                          AND created_at < %s
+                        GROUP BY song, difficulty, player_id, display_name, team
+                        ORDER BY song, difficulty, best_score DESC, LOWER(display_name) ASC
+                        """,
+                        (start_time, end_time),
+                    )
+                rows = cur.fetchall()
+    except psycopg2.errors.UndefinedTable:
+        return {}
+
+    result: dict[tuple[str, str], list[BingoChartLeaderboardEntry]] = {}
+    for row in rows:
+        key = (str(row["song"]), str(row["difficulty"]))
+        result.setdefault(key, []).append(
+            BingoChartLeaderboardEntry(
+                player_id=str(row["player_id"]),
+                display_name=str(row["display_name"]),
+                team=str(row["team"]),
+                score=int(row["best_score"]),
+            )
+        )
+    return result
+
+
+def merge_chart_leaderboard_with_roster(
+    roster: dict[str, list[BingoTeamPlayer]],
+    entries: list[BingoChartLeaderboardEntry],
+) -> list[BingoChartLeaderboardEntry]:
+    """Include every roster player; missing scores become 0."""
+    best_by_id = {entry.player_id: entry for entry in entries}
+    merged: list[BingoChartLeaderboardEntry] = []
+    seen: set[str] = set()
+
+    for team in TEAM_ORDER:
+        for player in roster.get(team, []):
+            seen.add(player.player_id)
+            existing = best_by_id.get(player.player_id)
+            if existing is not None:
+                merged.append(existing)
+            else:
+                merged.append(
+                    BingoChartLeaderboardEntry(
+                        player_id=player.player_id,
+                        display_name=player.display_name,
+                        team=player.team,
+                        score=0,
+                    )
+                )
+
+    for entry in entries:
+        if entry.player_id not in seen:
+            merged.append(entry)
+
+    merged.sort(key=lambda entry: (-entry.score, entry.display_name.casefold()))
+    return merged
 
 
 def load_bingo_team_totals_by_chart(

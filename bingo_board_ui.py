@@ -1,8 +1,9 @@
-"""Bingo Board UI for Streamlit."""
+﻿"""Bingo Board UI for Streamlit."""
 
 from __future__ import annotations
 
 import html
+import json
 import time
 from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
@@ -14,6 +15,7 @@ import streamlit.components.v1 as components
 from rating.bingo import (
     BingoCellStanding,
     BingoChart,
+    BingoChartLeaderboardEntry,
     BingoScoreboard,
     BingoSettings,
     BingoSquareClaimEvent,
@@ -31,6 +33,8 @@ from rating.bingo import (
     format_score_diff,
     group_claim_owners,
     bingo_chart_max_score,
+    load_all_bingo_chart_player_leaderboards,
+    merge_chart_leaderboard_with_roster,
     load_bingo_chart_standings_data,
     load_bingo_charts,
     load_bingo_player_chart_best,
@@ -154,6 +158,87 @@ def _format_bingo_updated_ago(updated_at: float, *, now: float | None = None) ->
     return f"{hours} {unit} ago"
 
 
+def _inject_bingo_board_layout_css(board_width: str) -> None:
+    st.markdown(
+        f"""
+        <style>
+        .st-key-bingo_board_viewport,
+        .st-key-bingo-board-viewport {{
+            width: min(100%, {board_width}) !important;
+            max-width: 100% !important;
+            margin: -2.1rem auto 0 !important;
+            padding: 0 !important;
+        }}
+        .st-key-bingo_board_viewport [data-testid="stVerticalBlockBorderWrapper"],
+        .st-key-bingo-board-viewport [data-testid="stVerticalBlockBorderWrapper"] {{
+            width: 100% !important;
+            max-width: 100% !important;
+            padding-top: 0 !important;
+            gap: 0 !important;
+        }}
+        .st-key-bingo_board_viewport [data-testid="stHorizontalBlock"]:has(.bingo-toolbar-marker),
+        .st-key-bingo-board-viewport [data-testid="stHorizontalBlock"]:has(.bingo-toolbar-marker) {{
+            width: 100% !important;
+            max-width: 100% !important;
+            margin: 0 !important;
+            padding: 0 !important;
+            align-items: flex-end !important;
+            gap: 0 !important;
+        }}
+        .st-key-bingo_board_viewport [data-testid="stHorizontalBlock"]:has(.bingo-toolbar-marker) [data-testid="column"],
+        .st-key-bingo-board-viewport [data-testid="stHorizontalBlock"]:has(.bingo-toolbar-marker) [data-testid="column"] {{
+            padding: 0 !important;
+        }}
+        .st-key-bingo_board_viewport
+        [data-testid="stHorizontalBlock"]:has(.bingo-toolbar-marker)
+        [data-testid="column"]:first-child [data-testid="stVerticalBlock"],
+        .st-key-bingo-board-viewport
+        [data-testid="stHorizontalBlock"]:has(.bingo-toolbar-marker)
+        [data-testid="column"]:first-child [data-testid="stVerticalBlock"] {{
+            align-items: flex-start !important;
+            gap: 0 !important;
+        }}
+        .st-key-bingo_board_viewport
+        [data-testid="stHorizontalBlock"]:has(.bingo-toolbar-marker)
+        [data-testid="column"]:last-child [data-testid="stVerticalBlock"],
+        .st-key-bingo-board-viewport
+        [data-testid="stHorizontalBlock"]:has(.bingo-toolbar-marker)
+        [data-testid="column"]:last-child [data-testid="stVerticalBlock"] {{
+            align-items: flex-end !important;
+            gap: 0 !important;
+        }}
+        .st-key-bingo_board_viewport
+        [data-testid="stHorizontalBlock"]:has(.bingo-toolbar-marker)
+        [data-testid="column"]:first-child
+        [data-testid="stElementContainer"]:has(.bingo-toolbar-marker),
+        .st-key-bingo-board-viewport
+        [data-testid="stHorizontalBlock"]:has(.bingo-toolbar-marker)
+        [data-testid="column"]:first-child
+        [data-testid="stElementContainer"]:has(.bingo-toolbar-marker) {{
+            margin: 0 !important;
+            padding: 0 !important;
+            min-height: 0 !important;
+            height: 0 !important;
+            overflow: hidden !important;
+        }}
+        .st-key-bingo_board_viewport .bingo-board-controls-toolbar,
+        .st-key-bingo-board-viewport .bingo-board-controls-toolbar {{
+            padding-bottom: 0.8rem !important;
+            margin: 0 !important;
+        }}
+        .st-key-bingo_board_viewport [data-testid="stCustomComponentV1"],
+        .st-key-bingo-board-viewport [data-testid="stCustomComponentV1"] {{
+            width: 100% !important;
+            max-width: 100% !important;
+            margin: 0 !important;
+            padding: 0 !important;
+        }}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def _render_bingo_board_toolbar(*, show_refresh: bool = True) -> None:
     if "bingo_last_updated" not in st.session_state:
         _touch_bingo_live_updated()
@@ -163,36 +248,6 @@ def _render_bingo_board_toolbar(*, show_refresh: bool = True) -> None:
     st.markdown(
         """
         <style>
-        div[data-testid="stHorizontalBlock"]:has(.bingo-toolbar-marker) {
-            width: min(100%, 1100px);
-            margin: 0.05rem auto 0.2rem !important;
-            padding: 0 !important;
-            align-items: center !important;
-            gap: 0.5rem !important;
-        }
-        div[data-testid="stElementContainer"]:has(.bingo-toolbar-marker),
-        div[data-testid="element-container"]:has(.bingo-toolbar-marker) {
-            margin-bottom: 0.2rem !important;
-            padding-bottom: 0 !important;
-        }
-        div[data-testid="stElementContainer"]:has(.bingo-board-shell),
-        div[data-testid="element-container"]:has(.bingo-board-shell) {
-            margin-top: 0 !important;
-            padding-top: 0 !important;
-        }
-        .bingo-board-shell {
-            margin-top: -0.4rem !important;
-        }
-        div[data-testid="stHorizontalBlock"]:has(.bingo-toolbar-marker)
-        [data-testid="column"] {
-            padding: 0 !important;
-        }
-        div[data-testid="stHorizontalBlock"]:has(.bingo-toolbar-marker)
-        [data-testid="stVerticalBlock"] {
-            gap: 0 !important;
-        }
-        div[data-testid="stHorizontalBlock"]:has(.bingo-toolbar-marker)
-        .element-container,
         div[data-testid="stHorizontalBlock"]:has(.bingo-toolbar-marker)
         [data-testid="stElementContainer"] {
             margin: 0 !important;
@@ -216,6 +271,7 @@ def _render_bingo_board_toolbar(*, show_refresh: bool = True) -> None:
             align-items: center !important;
             gap: 0.45rem !important;
             margin: 0 !important;
+            padding: 0 !important;
         }
         .st-key-bingo_refresh_board,
         .st-key-bingo-refresh-board {
@@ -285,6 +341,7 @@ def _render_bingo_board_toolbar(*, show_refresh: bool = True) -> None:
         .bingo-board-controls-toolbar {
             padding-bottom: 0.8rem !important;
             margin: 0 !important;
+            width: auto !important;
             min-height: 1.7rem;
         }
         .bingo-toolbar-marker { display: none; }
@@ -292,7 +349,7 @@ def _render_bingo_board_toolbar(*, show_refresh: bool = True) -> None:
         """,
         unsafe_allow_html=True,
     )
-    left, right = st.columns([1.15, 1.35], gap="small")
+    left, right = st.columns([1, 1], gap="small")
     with left:
         st.markdown(
             '<span class="bingo-toolbar-marker"></span>',
@@ -424,12 +481,13 @@ def _render_bingo_countdown(settings: BingoSettings) -> None:
             text-align: center;
             font-family: "Source Sans Pro", "Segoe UI", sans-serif;
             color: #eaeaea;
-            padding: 1.1rem 0 0 0;
+            padding: calc(1.05rem + 20px) 0 0 0;
           }}
           .bingo-countdown-label {{
             font-size: 1.05rem;
             font-weight: 700;
-            margin-bottom: 0.25rem;
+            line-height: 1.2;
+            margin-bottom: 0.1rem;
             color: rgba(234, 234, 234, 0.92);
           }}
           .bingo-countdown-timer {{
@@ -491,7 +549,7 @@ def _render_bingo_countdown(settings: BingoSettings) -> None:
           setInterval(tick, 1000);
         </script>
         """,
-        height=78,
+        height=86,
     )
 
 
@@ -502,38 +560,43 @@ def _render_bingo_header(settings: BingoSettings) -> None:
         if schedule
         else ""
     )
-    st.markdown(
-        f"""
-        <style>
-        .bingo-header {{
-            text-align: center;
-            margin: 0.15rem 0 0 0;
-        }}
-        .bingo-header-title {{
-            margin: 0 0 0.35rem 0;
-            font-size: 2.4rem;
-            font-weight: 800;
-            line-height: 1.15;
-            color: #eaeaea;
-            text-decoration: underline;
-            text-underline-offset: 0.14em;
-        }}
-        .bingo-header-schedule {{
-            margin-top: 0.85rem;
-            font-size: 1.05rem;
-            font-weight: 600;
-            color: rgba(234, 234, 234, 0.88);
-            line-height: 1.35;
-        }}
-        </style>
-        <div class="bingo-header">
-            <div class="bingo-header-title">UNBEATABLE Bingo</div>
-            {schedule_html}
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-    _render_bingo_countdown(settings)
+    with st.container(key="bingo_page_header"):
+        st.markdown(
+            f"""
+            <style>
+            .bingo-header {{
+                text-align: center;
+                margin: 0.15rem 0 0 0;
+            }}
+            .bingo-header-title {{
+                margin: 0 0 0.35rem 0;
+                font-size: 2.4rem;
+                font-weight: 800;
+                line-height: 1.15;
+                color: #eaeaea;
+                text-decoration: underline;
+                text-underline-offset: 0.14em;
+            }}
+            .bingo-header-schedule {{
+                margin-top: 0.85rem;
+                font-size: 1.05rem;
+                font-weight: 600;
+                color: rgba(234, 234, 234, 0.88);
+                line-height: 1.35;
+            }}
+            </style>
+            <div class="bingo-header">
+                <div class="bingo-header-title">UNBEATABLE Bingo</div>
+                {schedule_html}
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        _render_bingo_countdown(settings)
+        st.markdown(
+            '<span class="bingo-header-end-marker" style="display:none;"></span>',
+            unsafe_allow_html=True,
+        )
 
 
 def _cell_background(standing: BingoCellStanding) -> str:
@@ -716,8 +779,12 @@ def _render_cell_html(
         claim_team,
     )
     line_html = _bingo_line_svg_html(bingo_segments or [])
+    aria_label = html.escape(f"View leaderboard for {chart.display_name}")
     return (
-        f'<div class="bingo-cell" style="--bingo-cell-bg:{cell_bg};{border_css}">'
+        f'<div class="bingo-cell bingo-cell-link" role="button" tabindex="0"'
+        f' data-row="{chart.row}" data-col="{chart.column}"'
+        f' aria-label="{aria_label}"'
+        f' style="--bingo-cell-bg:{cell_bg};{border_css}">'
         f"{line_html}"
         f"{claim_html}"
         '<div class="bingo-cell-top">'
@@ -732,17 +799,111 @@ def _render_cell_html(
     )
 
 
+_BINGO_CHART_MODAL_SCROLLBAR_CSS = """
+    .bingo-chart-modal-panel,
+    .bingo-chart-modal-table-wrap {
+        scrollbar-width: thin;
+        scrollbar-color: rgba(234, 234, 234, 0.28) rgba(16, 22, 45, 0.55);
+    }
+    .bingo-chart-modal-panel::-webkit-scrollbar,
+    .bingo-chart-modal-table-wrap::-webkit-scrollbar {
+        width: 10px;
+        height: 10px;
+    }
+    .bingo-chart-modal-panel::-webkit-scrollbar-track,
+    .bingo-chart-modal-table-wrap::-webkit-scrollbar-track {
+        background: rgba(16, 22, 45, 0.55);
+        border-radius: 999px;
+    }
+    .bingo-chart-modal-panel::-webkit-scrollbar-thumb,
+    .bingo-chart-modal-table-wrap::-webkit-scrollbar-thumb {
+        background: rgba(234, 234, 234, 0.28);
+        border-radius: 999px;
+        border: 2px solid rgba(16, 22, 45, 0.55);
+    }
+    .bingo-chart-modal-panel::-webkit-scrollbar-thumb:hover,
+    .bingo-chart-modal-table-wrap::-webkit-scrollbar-thumb:hover {
+        background: rgba(234, 234, 234, 0.42);
+    }
+    .bingo-chart-modal-panel::-webkit-scrollbar-corner,
+    .bingo-chart-modal-table-wrap::-webkit-scrollbar-corner {
+        background: rgba(16, 22, 45, 0.55);
+    }
+"""
+
+_BINGO_CHART_MODAL_ANIMATION_CSS = """
+    .bingo-chart-modal-overlay {
+        display: flex;
+        opacity: 0;
+        visibility: hidden;
+        pointer-events: none;
+        transition: opacity 0.22s ease, visibility 0.22s ease;
+    }
+    .bingo-chart-modal-overlay.is-open {
+        opacity: 1;
+        visibility: visible;
+        pointer-events: auto;
+    }
+    .bingo-chart-modal-overlay.is-closing {
+        pointer-events: none;
+    }
+    .bingo-chart-modal-panel {
+        transform: translateY(12px) scale(0.985);
+        transition: transform 0.22s ease;
+    }
+    .bingo-chart-modal-overlay.is-open .bingo-chart-modal-panel {
+        transform: translateY(0) scale(1);
+    }
+"""
+
+
 def build_bingo_board_css() -> str:
     return f"""
     <style>
-    /* Keep custom HTML components (countdown / teams) full-width so content can center. */
-    div[data-testid="stCustomComponentV1"] {{
-        width: 100% !important;
-        max-width: 100% !important;
+    /* Tighten countdown -> toolbar gap without touching page-level layout. */
+    .st-key-bingo_page_header,
+    .st-key-bingo-page-header {{
+        margin: 0 0 -2.1rem 0 !important;
+        padding: 0 !important;
     }}
-    div[data-testid="stCustomComponentV1"] iframe {{
+    .st-key-bingo_page_header [data-testid="stVerticalBlockBorderWrapper"],
+    .st-key-bingo-page-header [data-testid="stVerticalBlockBorderWrapper"],
+    .st-key-bingo_page_header [data-testid="stVerticalBlock"],
+    .st-key-bingo-page-header [data-testid="stVerticalBlock"] {{
+        gap: 0 !important;
+        padding-bottom: 0 !important;
+    }}
+    .st-key-bingo_page_header [data-testid="stElementContainer"],
+    .st-key-bingo-page-header [data-testid="stElementContainer"] {{
+        margin: 0 !important;
+        padding: 0 !important;
+    }}
+    .st-key-bingo_page_header [data-testid="stCustomComponentV1"],
+    .st-key-bingo-page-header [data-testid="stCustomComponentV1"] {{
+        margin: 0 !important;
+        padding: 0 !important;
+        height: 86px !important;
+    }}
+    .st-key-bingo_page_header iframe,
+    .st-key-bingo-page-header iframe {{
+        height: 86px !important;
+        min-height: 0 !important;
+        display: block !important;
+        margin: 0 !important;
+        padding: 0 !important;
+    }}
+    .st-key-bingo_page_header [data-testid="stElementContainer"]:has(.bingo-header-end-marker),
+    .st-key-bingo-page-header [data-testid="stElementContainer"]:has(.bingo-header-end-marker) {{
+        min-height: 0 !important;
+        height: 0 !important;
+        overflow: hidden !important;
+    }}
+    .st-key-bingo_board_viewport [data-testid="stCustomComponentV1"],
+    .st-key-bingo-board-viewport [data-testid="stCustomComponentV1"] {{
         width: 100% !important;
         max-width: 100% !important;
+        margin: 0 !important;
+        padding: 0 !important;
     }}
     .bingo-board-shell {{
         width: min(100%, 1100px);
@@ -755,12 +916,12 @@ def build_bingo_board_css() -> str:
         align-items: center;
         gap: 2rem;
         margin: 0;
-        padding: 0 0 0.8rem 0;
+        padding: 0;
     }}
     .bingo-board-controls-toolbar {{
         padding: 0 0 0.8rem 0 !important;
         margin: 0 !important;
-        width: 100%;
+        width: auto !important;
         min-height: 1.7rem;
     }}
     .bingo-board-toggle-label {{
@@ -855,7 +1016,7 @@ def build_bingo_board_css() -> str:
     }}
     .bingo-board-wrap {{
         width: 100%;
-        overflow-x: auto;
+        overflow-x: hidden;
         padding-bottom: 2rem;
     }}
     .bingo-board {{
@@ -882,6 +1043,125 @@ def build_bingo_board_css() -> str:
         box-sizing: border-box;
         border: none;
         overflow: hidden;
+    }}
+    .bingo-cell:not(.bingo-cell-empty) {{
+        cursor: pointer;
+    }}
+    a.bingo-cell-link:focus-visible {{
+        outline: none;
+        box-shadow: inset 0 0 0 2px rgba(110, 176, 255, 0.85);
+    }}
+    .bingo-chart-modal-overlay {{
+        position: fixed;
+        inset: 0;
+        z-index: 1000000;
+        align-items: center;
+        justify-content: center;
+        padding: 1.5rem;
+        box-sizing: border-box;
+    }}
+    {_BINGO_CHART_MODAL_ANIMATION_CSS}
+    .bingo-chart-modal-backdrop {{
+        position: absolute;
+        inset: 0;
+        border: none;
+        background: rgba(4, 8, 20, 0.72);
+        cursor: pointer;
+    }}
+    .bingo-chart-modal-panel {{
+        position: relative;
+        z-index: 1;
+        width: min(100%, 720px);
+        max-height: min(80vh, 760px);
+        overflow: auto;
+        background: #10162d;
+        border: 1px solid rgba(234, 234, 234, 0.18);
+        border-radius: 0.85rem;
+        box-shadow: 0 24px 64px rgba(0, 0, 0, 0.45);
+        padding: 1.25rem 1.25rem 1.1rem;
+        box-sizing: border-box;
+    }}
+    {_BINGO_CHART_MODAL_SCROLLBAR_CSS}
+    .bingo-chart-modal-close {{
+        position: absolute;
+        top: 0.65rem;
+        right: 0.75rem;
+        border: none;
+        background: transparent;
+        color: rgba(234, 234, 234, 0.72);
+        font-size: 1.65rem;
+        line-height: 1;
+        cursor: pointer;
+        padding: 0.15rem 0.35rem;
+    }}
+    .bingo-chart-modal-close:hover {{
+        color: #ffffff;
+    }}
+    .bingo-chart-modal-title {{
+        font-size: 1.35rem;
+        font-weight: 800;
+        color: #f5f5f5;
+        margin: 0 2rem 0.2rem 0;
+        line-height: 1.25;
+        font-family: "Source Sans Pro", "Segoe UI", sans-serif;
+    }}
+    .bingo-chart-modal-diff {{
+        font-weight: 400;
+        color: rgba(234, 234, 234, 0.82);
+    }}
+    .bingo-chart-modal-subtitle {{
+        font-size: 0.95rem;
+        font-weight: 600;
+        color: rgba(234, 234, 234, 0.62);
+        margin: 0 0 1rem 0;
+        font-family: "Source Sans Pro", "Segoe UI", sans-serif;
+    }}
+    .bingo-chart-modal-table-wrap {{
+        overflow-x: auto;
+    }}
+    .bingo-chart-modal-table {{
+        width: 100%;
+        border-collapse: collapse;
+        font-family: "Source Sans Pro", "Segoe UI", sans-serif;
+        color: #eaeaea;
+    }}
+    .bingo-chart-modal-table th,
+    .bingo-chart-modal-table td {{
+        padding: 0.55rem 0.75rem;
+        border-bottom: 1px solid rgba(234, 234, 234, 0.14);
+        text-align: left;
+        vertical-align: middle;
+    }}
+    .bingo-chart-modal-table th {{
+        font-size: 0.82rem;
+        font-weight: 800;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        color: rgba(234, 234, 234, 0.58);
+    }}
+    .bingo-chart-modal-rank {{
+        width: 3rem;
+        color: rgba(234, 234, 234, 0.72);
+        font-variant-numeric: tabular-nums;
+    }}
+    .bingo-chart-modal-player {{
+        font-weight: 700;
+    }}
+    .bingo-chart-modal-team {{
+        width: 5.5rem;
+        font-weight: 700;
+    }}
+    .bingo-chart-modal-score {{
+        width: 6rem;
+        font-weight: 800;
+        font-variant-numeric: tabular-nums;
+        text-align: right !important;
+    }}
+    .bingo-chart-modal-empty {{
+        padding: 1.25rem 0.5rem;
+        color: rgba(234, 234, 234, 0.72);
+        font-size: 1rem;
+        font-weight: 600;
     }}
     .bingo-cell-claim-outline {{
         position: absolute;
@@ -949,7 +1229,7 @@ def build_bingo_board_css() -> str:
     }}
     .bingo-cell-diff {{
         font-size: 0.88rem;
-        font-weight: 600;
+        font-weight: 400;
         line-height: 1.15;
         width: 100%;
         margin-top: 0.1rem;
@@ -1638,12 +1918,6 @@ def _render_bingo_manual_submission(
     st.markdown(
         """
         <style>
-          div[data-testid="stElementContainer"]:has(.st-key-bingo_submit_panel),
-          div[data-testid="stElementContainer"]:has(.st-key-bingo-submit-panel) {
-            width: 100% !important;
-            display: flex !important;
-            justify-content: center !important;
-          }
           .st-key-bingo_submit_panel,
           .st-key-bingo-submit-panel {
             width: min(100%, 720px) !important;
@@ -2097,12 +2371,6 @@ def _render_bingo_historical_banner(
     st.markdown(
         """
         <style>
-        div[data-testid="stElementContainer"]:has(.st-key-bingo_live_banner_row),
-        div[data-testid="stElementContainer"]:has(.st-key-bingo-live-banner-row) {
-            width: 100% !important;
-            display: flex !important;
-            justify-content: center !important;
-        }
         .st-key-bingo_live_banner_row,
         .st-key-bingo-live-banner-row {
             width: fit-content !important;
@@ -2311,6 +2579,655 @@ def _render_bingo_day_view_controls(
     return view_day
 
 
+def _bingo_board_snapshot_label(
+    *,
+    view_day: int | None,
+    day_count: int,
+) -> str:
+    if view_day is None:
+        return "Live board"
+    if view_day >= day_count:
+        return "Final board"
+    return f"End of Day {view_day}"
+
+
+def _build_bingo_chart_modal_payload(
+    charts: list[BingoChart],
+    entries_by_chart: dict[tuple[str, str], list[BingoChartLeaderboardEntry]],
+    *,
+    roster: dict[str, list[BingoTeamPlayer]],
+) -> dict[str, dict[str, str]]:
+    payload: dict[str, dict[str, str]] = {}
+    for chart in charts:
+        raw_entries = entries_by_chart.get((chart.song, chart.difficulty), [])
+        entries = merge_chart_leaderboard_with_roster(roster, raw_entries)
+        difficulty = html.escape(_difficulty_label(chart.difficulty, chart.level))
+        key = f"{chart.row},{chart.column}"
+        payload[key] = {
+            "title_html": (
+                f'{html.escape(chart.display_name)} '
+                f'<span class="bingo-chart-modal-diff">{difficulty}</span>'
+            ),
+            "table_html": _render_bingo_chart_leaderboard_table_html(entries),
+        }
+    return payload
+
+
+BINGO_CELL_SIZE = "12.75rem"
+
+
+def _bingo_board_width_expr(*, rows: int) -> str:
+    board_height = f"calc({rows} * {BINGO_CELL_SIZE})"
+    return f"calc(1.15 * {board_height})"
+
+
+def _bingo_board_component_css(*, cols: int, rows: int) -> str:
+    board_width = _bingo_board_width_expr(rows=rows)
+    board_height = f"calc({rows} * {BINGO_CELL_SIZE})"
+    return f"""
+    html, body {{
+        margin: 0;
+        padding: 0;
+        background: transparent;
+        overflow: hidden;
+        width: 100%;
+        font-family: "Source Sans Pro", "Segoe UI", sans-serif;
+    }}
+    body {{
+        display: flex;
+        justify-content: center;
+        align-items: flex-start;
+    }}
+    .bingo-board-root {{
+        width: {board_width};
+        max-width: 100%;
+        position: relative;
+    }}
+    .bingo-board-stage {{
+        position: relative;
+        width: 100%;
+    }}
+    .bingo-board-wrap {{
+        width: 100%;
+        overflow-x: hidden;
+    }}
+    .bingo-board-shell {{
+        width: 100%;
+        margin: 0;
+    }}
+    .bingo-board {{
+        display: grid;
+        gap: 0;
+        width: 100%;
+        height: {board_height};
+        margin: 0;
+        border: 1px solid rgba(234, 234, 234, 0.22);
+        background: {BINGO_PAGE_BG};
+        align-items: stretch;
+        grid-template-columns: repeat({cols}, minmax(0, 1fr));
+        grid-template-rows: repeat({rows}, minmax(0, 1fr));
+    }}
+    .bingo-board-root.hide-lines .bingo-line-svg {{
+        display: none !important;
+    }}
+    .bingo-board-root:not(.is-detailed) .bingo-cell-mid,
+    .bingo-board-root:not(.is-detailed) .bingo-cell-bot {{
+        overflow: hidden;
+        min-height: 0;
+        opacity: 0;
+        transform: translateY(-0.35rem);
+        transition: opacity 0.22s ease, transform 0.22s ease;
+    }}
+    .bingo-board-root:not(.is-detailed) .bingo-cell {{
+        cursor: pointer;
+        grid-template-rows: 1fr 0fr 0fr;
+        place-items: stretch;
+        transition: grid-template-rows 0.28s ease;
+    }}
+    .bingo-board-root:not(.is-detailed) .bingo-cell-top {{
+        position: relative;
+        min-height: 0;
+        height: 100%;
+        width: 100%;
+    }}
+    .bingo-board-root:not(.is-detailed) .bingo-cell-header {{
+        position: absolute;
+        left: 0;
+        right: 0;
+        width: 100%;
+        top: 50%;
+        transform: translateY(-50%);
+        transition: top 0.28s ease, transform 0.28s ease;
+    }}
+    .bingo-board-root:not(.is-detailed) .bingo-cell-song {{
+        font-size: 1.05rem;
+        -webkit-line-clamp: unset;
+    }}
+    .bingo-board-root:not(.is-detailed) .bingo-cell-diff {{
+        font-size: 0.95rem;
+        margin-top: 0.25rem;
+    }}
+    .bingo-board-root:not(.is-detailed) .bingo-cell:hover {{
+        z-index: 6;
+        grid-template-rows: minmax(3.5rem, auto) minmax(4.25rem, 1fr) minmax(2.15rem, auto);
+    }}
+    .bingo-board-root:not(.is-detailed) .bingo-cell:hover .bingo-cell-mid,
+    .bingo-board-root:not(.is-detailed) .bingo-cell:hover .bingo-cell-bot {{
+        opacity: 1;
+        transform: translateY(0);
+        transition-delay: 0.05s;
+    }}
+    .bingo-board-root:not(.is-detailed) .bingo-cell:hover .bingo-cell-top {{
+        min-height: 3.5rem;
+        height: auto;
+    }}
+    .bingo-board-root:not(.is-detailed) .bingo-cell:hover .bingo-cell-header {{
+        top: 0;
+        transform: translateY(0);
+    }}
+    .bingo-board-root:not(.is-detailed) .bingo-cell:hover .bingo-cell-song {{
+        font-size: 0.95rem;
+        -webkit-line-clamp: 2;
+    }}
+    .bingo-board-root:not(.is-detailed) .bingo-cell:hover .bingo-cell-diff {{
+        font-size: 0.88rem;
+        margin-top: 0.1rem;
+    }}
+    .bingo-cell {{
+        --bingo-cell-bg: {BINGO_CELL_BG};
+        position: relative;
+        background: var(--bingo-cell-bg);
+        color: #eaeaea;
+        text-align: center;
+        padding: 0.6rem 0.4rem 0.55rem;
+        width: 100%;
+        height: 100%;
+        min-height: 0;
+        display: grid;
+        grid-template-rows: minmax(3.5rem, auto) minmax(4.25rem, 1fr) minmax(2.15rem, auto);
+        align-content: stretch;
+        box-sizing: border-box;
+        border: none;
+        overflow: hidden;
+    }}
+    .bingo-cell-link {{
+        cursor: pointer;
+    }}
+    .bingo-cell-link:focus-visible {{
+        outline: none;
+        box-shadow: inset 0 0 0 2px rgba(110, 176, 255, 0.85);
+    }}
+    .bingo-cell-claim-outline {{
+        position: absolute;
+        inset: 0;
+        z-index: 5;
+        pointer-events: none;
+        box-sizing: border-box;
+    }}
+    .bingo-line-svg {{
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        z-index: 3;
+        pointer-events: none;
+        overflow: visible;
+    }}
+    .bingo-cell-empty {{
+        border: {DEFAULT_CELL_BORDER};
+        cursor: default;
+    }}
+    .bingo-cell-top, .bingo-cell-header, .bingo-cell-bot, .bingo-cell-mid {{
+        position: relative;
+        z-index: 4;
+        background: transparent;
+    }}
+    .bingo-cell-top {{
+        min-height: 3.5rem;
+        display: flex;
+        flex-direction: column;
+        justify-content: flex-start;
+        align-items: center;
+    }}
+    .bingo-cell-header {{ width: 100%; }}
+    .bingo-cell-bot {{
+        min-height: 2.15rem;
+        display: flex;
+        flex-direction: column;
+        justify-content: flex-end;
+    }}
+    .bingo-cell-mid {{
+        display: flex;
+        flex-direction: column;
+        justify-content: flex-start;
+        align-items: center;
+        min-height: 4.25rem;
+        padding-top: 0.15rem;
+        pointer-events: none;
+    }}
+    .bingo-cell-song {{
+        font-size: 0.95rem;
+        font-weight: 700;
+        line-height: 1.15;
+        width: 100%;
+        color: #eaeaea;
+        display: -webkit-box;
+        -webkit-box-orient: vertical;
+        -webkit-line-clamp: 2;
+        overflow: hidden;
+    }}
+    .bingo-cell-diff {{
+        font-size: 0.88rem;
+        font-weight: 400;
+        line-height: 1.15;
+        width: 100%;
+        margin-top: 0.1rem;
+        color: rgba(234, 234, 234, 0.82);
+    }}
+    .bingo-cell-leader {{
+        font-weight: 800;
+        line-height: 1.1;
+        width: 100%;
+        box-sizing: border-box;
+        padding: 0.2rem 0.4rem;
+    }}
+    .bingo-cell-leader-team {{
+        font-size: 1.05rem;
+        display: inline-block;
+        border-bottom: 1px solid currentColor;
+        padding-bottom: 0.05em;
+        line-height: 1.2;
+    }}
+    .bingo-cell-leader-score {{
+        font-size: 1.15rem;
+        margin-top: 0.35rem;
+        color: #eaeaea;
+    }}
+    .bingo-cell-status {{
+        font-size: 1rem;
+        font-weight: 700;
+        color: rgba(234, 234, 234, 0.55);
+        width: 100%;
+        box-sizing: border-box;
+        background: var(--bingo-cell-bg);
+        padding: 0.2rem 0.4rem;
+    }}
+    .bingo-cell-trailers {{
+        display: flex;
+        align-items: stretch;
+        justify-content: center;
+        min-height: 1.45rem;
+        width: 100%;
+        border-top: 1px solid rgba(234, 234, 234, 0.28);
+        padding-top: 0.2rem;
+        box-sizing: border-box;
+    }}
+    .bingo-cell-trailer {{
+        flex: 1 1 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 1.05rem;
+        font-weight: 700;
+        padding: 0.05rem 0.15rem;
+    }}
+    .bingo-cell-trailer-split {{
+        border-left: 1px solid rgba(234, 234, 234, 0.28);
+    }}
+    .bingo-chart-modal-overlay {{
+        position: absolute;
+        inset: 0;
+        z-index: 1000;
+        align-items: center;
+        justify-content: center;
+        padding: 1.5rem;
+        box-sizing: border-box;
+    }}
+    {_BINGO_CHART_MODAL_ANIMATION_CSS}
+    .bingo-chart-modal-backdrop {{
+        position: absolute;
+        inset: 0;
+        border: none;
+        background: rgba(4, 8, 20, 0.72);
+        cursor: pointer;
+    }}
+    .bingo-chart-modal-panel {{
+        position: relative;
+        z-index: 1;
+        width: min(100%, 26rem);
+        max-height: min(80vh, 760px);
+        overflow: auto;
+        background: #10162d;
+        border: 1px solid rgba(234, 234, 234, 0.18);
+        border-radius: 0.85rem;
+        box-shadow: 0 24px 64px rgba(0, 0, 0, 0.45);
+        padding: 1.25rem 1.25rem 1.1rem;
+        box-sizing: border-box;
+    }}
+    {_BINGO_CHART_MODAL_SCROLLBAR_CSS}
+    .bingo-chart-modal-close {{
+        position: absolute;
+        top: 0.65rem;
+        right: 0.75rem;
+        border: none;
+        background: transparent;
+        color: rgba(234, 234, 234, 0.72);
+        font-size: 1.65rem;
+        line-height: 1;
+        cursor: pointer;
+        padding: 0.15rem 0.35rem;
+    }}
+    .bingo-chart-modal-close:hover {{ color: #ffffff; }}
+    .bingo-chart-modal-title {{
+        font-size: 1.35rem;
+        font-weight: 800;
+        color: #f5f5f5;
+        margin: 0 2rem 0.2rem 0;
+        line-height: 1.25;
+    }}
+    .bingo-chart-modal-diff {{
+        font-weight: 400;
+        color: rgba(234, 234, 234, 0.82);
+    }}
+    .bingo-chart-modal-subtitle {{
+        font-size: 0.95rem;
+        font-weight: 600;
+        color: rgba(234, 234, 234, 0.62);
+        margin: 0 0 1rem 0;
+    }}
+    .bingo-chart-modal-table {{
+        width: 100%;
+        border-collapse: collapse;
+        color: #eaeaea;
+    }}
+    .bingo-chart-modal-table th,
+    .bingo-chart-modal-table td {{
+        padding: 0.55rem 0.75rem;
+        border-bottom: 1px solid rgba(234, 234, 234, 0.14);
+        text-align: left;
+        vertical-align: middle;
+    }}
+    .bingo-chart-modal-table th {{
+        font-size: 0.82rem;
+        font-weight: 800;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        color: rgba(234, 234, 234, 0.58);
+    }}
+    .bingo-chart-modal-rank {{
+        width: 2.2rem;
+        color: rgba(234, 234, 234, 0.72);
+        font-variant-numeric: tabular-nums;
+    }}
+    .bingo-chart-modal-player {{
+        font-weight: 700;
+        width: 11rem;
+        max-width: 11rem;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }}
+    .bingo-chart-modal-score {{
+        width: 6rem;
+        font-weight: 800;
+        font-variant-numeric: tabular-nums;
+        text-align: right !important;
+    }}
+    .bingo-chart-modal-empty {{
+        padding: 1.25rem 0.5rem;
+        color: rgba(234, 234, 234, 0.72);
+        font-size: 1rem;
+        font-weight: 600;
+    }}
+    """
+
+
+def _bingo_board_component_height(rows: int, cols: int) -> int:
+    cell_px = 204
+    _ = cols
+    return max(260, rows * cell_px)
+
+
+def _build_bingo_board_interactive_html(
+    *,
+    cells_html: list[str],
+    cols: int,
+    modal_payload: dict[str, dict[str, str]],
+    snapshot_label: str,
+    updated_ms: int | None,
+) -> str:
+    payload_json = json.dumps(modal_payload).replace("</", "<\\/")
+    snapshot_json = json.dumps(snapshot_label)
+    updated_ms_json = "null" if updated_ms is None else str(int(updated_ms))
+    return f"""
+        <div class="bingo-board-stage">
+          <div class="bingo-board-shell">
+            <div class="bingo-board-wrap">
+              <div class="bingo-board" style="grid-template-columns: repeat({cols}, minmax(0, 1fr));">
+                {"".join(cells_html)}
+              </div>
+            </div>
+          </div>
+          <div id="bingo-chart-modal" class="bingo-chart-modal-overlay" aria-hidden="true">
+            <button type="button" class="bingo-chart-modal-backdrop" aria-label="Close chart leaderboard"></button>
+            <div class="bingo-chart-modal-panel" role="dialog" aria-modal="true" aria-labelledby="bingo-chart-modal-title">
+              <button type="button" class="bingo-chart-modal-close" aria-label="Close">&times;</button>
+              <div id="bingo-chart-modal-title" class="bingo-chart-modal-title"></div>
+              <div class="bingo-chart-modal-subtitle"></div>
+              <div class="bingo-chart-modal-body"></div>
+            </div>
+          </div>
+        </div>
+        <script>
+        (function () {{
+          const root = document.getElementById("bingo-board-root");
+          const modalData = {payload_json};
+          const snapshotLabel = {snapshot_json};
+          const updatedMs = {updated_ms_json};
+          const modal = document.getElementById("bingo-chart-modal");
+          const titleEl = modal.querySelector(".bingo-chart-modal-title");
+          const subtitleEl = modal.querySelector(".bingo-chart-modal-subtitle");
+          const bodyEl = modal.querySelector(".bingo-chart-modal-body");
+          const backdropEl = modal.querySelector(".bingo-chart-modal-backdrop");
+          const closeEl = modal.querySelector(".bingo-chart-modal-close");
+          let lastFocused = null;
+          let subtitleTimer = null;
+          let closeTimer = null;
+          const MODAL_ANIM_MS = 220;
+
+          function formatAgo(ms) {{
+            const seconds = Math.max(0, Math.floor((Date.now() - ms) / 1000));
+            if (seconds < 30) {{
+              return "seconds ago";
+            }}
+            if (seconds < 60) {{
+              return "30 seconds ago";
+            }}
+            const minutes = Math.floor(seconds / 60);
+            if (minutes < 60) {{
+              return minutes === 1 ? "1 minute ago" : minutes + " minutes ago";
+            }}
+            const hours = Math.floor(minutes / 60);
+            return hours === 1 ? "1 hour ago" : hours + " hours ago";
+          }}
+
+          function updateSubtitle() {{
+            if (updatedMs !== null) {{
+              subtitleEl.textContent = "Scores as of " + formatAgo(updatedMs);
+              return;
+            }}
+            subtitleEl.textContent = "Scores as of " + snapshotLabel;
+          }}
+
+          function syncBoardModes() {{
+            let detailed = false;
+            let hideLines = false;
+            try {{
+              const parentDoc = window.parent.document;
+              detailed = !!parentDoc.querySelector(".bingo-detailed-toggle:checked");
+              hideLines = !!parentDoc.querySelector(".bingo-lines-toggle:checked");
+            }} catch (error) {{}}
+            root.classList.toggle("is-detailed", detailed);
+            root.classList.toggle("hide-lines", hideLines);
+          }}
+
+          function finishCloseModal() {{
+            modal.classList.remove("is-closing");
+            closeTimer = null;
+            if (subtitleTimer !== null) {{
+              clearInterval(subtitleTimer);
+              subtitleTimer = null;
+            }}
+            bodyEl.innerHTML = "";
+            if (lastFocused && typeof lastFocused.focus === "function") {{
+              lastFocused.focus();
+            }}
+          }}
+
+          function closeModal() {{
+            if (!modal.classList.contains("is-open") || modal.classList.contains("is-closing")) {{
+              return;
+            }}
+            modal.classList.add("is-closing");
+            modal.classList.remove("is-open");
+            modal.setAttribute("aria-hidden", "true");
+            if (closeTimer !== null) {{
+              clearTimeout(closeTimer);
+            }}
+            closeTimer = window.setTimeout(finishCloseModal, MODAL_ANIM_MS + 40);
+          }}
+
+          function openModal(row, col) {{
+            const data = modalData[row + "," + col];
+            if (!data) {{
+              return;
+            }}
+            if (closeTimer !== null) {{
+              clearTimeout(closeTimer);
+              closeTimer = null;
+            }}
+            modal.classList.remove("is-closing");
+            lastFocused = document.activeElement;
+            titleEl.innerHTML = data.title_html || data.title || "";
+            updateSubtitle();
+            if (updatedMs !== null && subtitleTimer === null) {{
+              subtitleTimer = setInterval(updateSubtitle, 1000);
+            }}
+            bodyEl.innerHTML = data.table_html;
+            modal.classList.add("is-open");
+            modal.setAttribute("aria-hidden", "false");
+            closeEl.focus();
+          }}
+
+          root.addEventListener("click", (event) => {{
+            const cell = event.target.closest(".bingo-cell-link");
+            if (!cell) {{
+              return;
+            }}
+            event.preventDefault();
+            event.stopPropagation();
+            openModal(cell.dataset.row, cell.dataset.col);
+          }});
+          root.addEventListener("keydown", (event) => {{
+            const cell = event.target.closest(".bingo-cell-link");
+            if (!cell) {{
+              return;
+            }}
+            if (event.key !== "Enter" && event.key !== " ") {{
+              return;
+            }}
+            event.preventDefault();
+            openModal(cell.dataset.row, cell.dataset.col);
+          }});
+          backdropEl.addEventListener("click", closeModal);
+          closeEl.addEventListener("click", closeModal);
+          document.addEventListener("keydown", (event) => {{
+            if (event.key === "Escape" && modal.classList.contains("is-open")) {{
+              closeModal();
+            }}
+          }});
+          syncBoardModes();
+          setInterval(syncBoardModes, 250);
+          try {{
+            const parentDoc = window.parent.document;
+            parentDoc.addEventListener("change", syncBoardModes, true);
+            parentDoc.addEventListener("click", syncBoardModes, true);
+          }} catch (error) {{}}
+        }})();
+        </script>
+        """
+
+
+def _render_bingo_board_component(
+    *,
+    cells_html: list[str],
+    cols: int,
+    rows: int,
+    modal_payload: dict[str, dict[str, str]],
+    snapshot_label: str,
+    updated_ms: int | None,
+) -> None:
+    inner_html = _build_bingo_board_interactive_html(
+        cells_html=cells_html,
+        cols=cols,
+        modal_payload=modal_payload,
+        snapshot_label=snapshot_label,
+        updated_ms=updated_ms,
+    )
+    component_html = (
+        "<!DOCTYPE html><html><head><meta charset='utf-8'><style>"
+        + _bingo_board_component_css(cols=cols, rows=rows)
+        + "</style></head><body>"
+        + f'<div class="bingo-board-root" id="bingo-board-root">{inner_html}</div>'
+        + "</body></html>"
+    )
+    components.html(
+        component_html,
+        height=_bingo_board_component_height(rows, cols),
+        scrolling=False,
+    )
+
+
+def _render_bingo_chart_leaderboard_table_html(
+    entries: list[BingoChartLeaderboardEntry],
+) -> str:
+    if not entries:
+        return (
+            '<div class="bingo-chart-modal-empty">'
+            "No players are on the bingo roster yet."
+            "</div>"
+        )
+
+    rows: list[str] = []
+    rank = 0
+    for index, entry in enumerate(entries):
+        if index == 0 or entry.score != entries[index - 1].score:
+            rank = index + 1
+        team_color = TEAM_TEXT_COLORS.get(entry.team, "#eaeaea")
+        player = html.escape(entry.display_name)
+        score = html.escape(format_leader_score(entry.score))
+        rows.append(
+            "<tr>"
+            f'<td class="bingo-chart-modal-rank">{rank}</td>'
+            f'<td class="bingo-chart-modal-player" style="color:{team_color};">'
+            f"{player}</td>"
+            f'<td class="bingo-chart-modal-score">{score}</td>'
+            "</tr>"
+        )
+    return (
+        '<div class="bingo-chart-modal-table-wrap">'
+        '<table class="bingo-chart-modal-table">'
+        "<thead><tr>"
+        '<th class="bingo-chart-modal-rank">#</th>'
+        '<th class="bingo-chart-modal-player">Player</th>'
+        '<th class="bingo-chart-modal-score">Score</th>'
+        "</tr></thead>"
+        f"<tbody>{''.join(rows)}</tbody>"
+        "</table>"
+        "</div>"
+    )
+
+
 @st.fragment
 def _render_bingo_board_fragment(
     *,
@@ -2353,12 +3270,21 @@ def _render_bingo_board_fragment(
     )
     totals = {key: values[0] for key, values in standings_data.items()}
     player_bests = {key: values[1] for key, values in standings_data.items()}
-    by_coord = {(chart.row, chart.column): chart for chart in charts}
+    try:
+        leaderboard_by_chart = load_all_bingo_chart_player_leaderboards(
+            start_time=settings.start_time,
+            end_time=end_time,
+        )
+    except Exception as exc:
+        st.error(f"Failed to load chart leaderboards: {exc}")
+        leaderboard_by_chart = {}
+
     groups_by_coord = {
         (chart.row, chart.column): chart.group for chart in charts
     }
     claim_owners = _group_claim_owners(charts, totals, player_bests)
 
+    by_coord = {(chart.row, chart.column): chart for chart in charts}
     cells_html: list[str] = []
     max_row = max(chart.row for chart in charts)
     max_col = max(chart.column for chart in charts)
@@ -2396,20 +3322,31 @@ def _render_bingo_board_fragment(
                 )
             )
 
-    _render_bingo_board_toolbar(show_refresh=view_day is None)
-    board_slot = st.empty()
-    board_slot.markdown(
-        f"""
-        <div class="bingo-board-shell">
-          <div class="bingo-board-wrap">
-            <div class="bingo-board" style="grid-template-columns: repeat({cols}, minmax(0, 1fr));">
-              {"".join(cells_html)}
-            </div>
-          </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
+    board_width = _bingo_board_width_expr(rows=rows)
+    _inject_bingo_board_layout_css(board_width)
+    modal_payload = _build_bingo_chart_modal_payload(
+        charts,
+        leaderboard_by_chart,
+        roster=_cached_bingo_teams(),
     )
+    updated_ms = (
+        int(float(st.session_state.bingo_last_updated) * 1000)
+        if view_day is None
+        else None
+    )
+    with st.container(key="bingo_board_viewport"):
+        _render_bingo_board_toolbar(show_refresh=view_day is None)
+        _render_bingo_board_component(
+            cells_html=cells_html,
+            cols=cols,
+            rows=rows,
+            modal_payload=modal_payload,
+            snapshot_label=_bingo_board_snapshot_label(
+                view_day=view_day,
+                day_count=day_count,
+            ),
+            updated_ms=updated_ms,
+        )
     _render_bingo_day_view_controls(completed_days, day_count=day_count)
     highlight_day = view_day
     if highlight_day is None:
