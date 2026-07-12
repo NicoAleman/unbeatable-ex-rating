@@ -786,6 +786,25 @@ st.markdown(
     .st-key-tool-picker [data-testid="stButton"] button {{
         width: auto !important;
     }}
+    .st-key-tool-picker [data-testid="stButton"] button[kind="primary"],
+    .st-key-tool-picker [data-testid="stButton"] button[data-testid="baseButton-primary"] {{
+        background-color: #008f68 !important;
+        border-color: #008f68 !important;
+        color: #ffffff !important;
+    }}
+    .st-key-tool-picker [data-testid="stButton"] button[kind="primary"]:hover:not(:disabled),
+    .st-key-tool-picker [data-testid="stButton"] button[data-testid="baseButton-primary"]:hover:not(:disabled) {{
+        background-color: #007a58 !important;
+        border-color: #007a58 !important;
+        color: #ffffff !important;
+    }}
+    .st-key-tool-picker [data-testid="stButton"] button[kind="primary"]:disabled,
+    .st-key-tool-picker [data-testid="stButton"] button[data-testid="baseButton-primary"]:disabled {{
+        background-color: #008f68 !important;
+        border-color: #008f68 !important;
+        color: #ffffff !important;
+        opacity: 0.45 !important;
+    }}
     .st-key-tool-picker [data-testid="stMarkdownContainer"] p {{
         margin: 0 !important;
         line-height: 2.4 !important;
@@ -1751,17 +1770,63 @@ def _render_main_tools_nav() -> None:
                 if st.button("Back to EX Rating", key="nav-back-ex-rating"):
                     st.session_state.app_page = "ex_rating"
                     st.rerun()
-                st.button(
-                    "Keybind Configurator",
-                    key="nav-keybind-configurator-active",
-                    type="primary",
-                    disabled=True,
-                )
+                selected = st.session_state.get("selected_tool", "keybind_configurator")
+                if selected == "keybind_configurator":
+                    st.button(
+                        "Keybind Configurator",
+                        key="nav-keybind-configurator-active",
+                        type="primary",
+                        disabled=True,
+                    )
+                    if st.button(
+                        "Bingo",
+                        key="nav-bingo-from-tools",
+                        type="primary",
+                    ):
+                        st.session_state.selected_tool = "bingo"
+                        st.rerun()
+                elif selected == "bingo":
+                    if st.button(
+                        "Keybind Configurator",
+                        key="nav-keybind-from-bingo",
+                        type="primary",
+                    ):
+                        st.session_state.selected_tool = "keybind_configurator"
+                        st.rerun()
+                    st.button(
+                        "Bingo",
+                        key="nav-bingo-active",
+                        type="primary",
+                        disabled=True,
+                    )
+                else:
+                    if st.button(
+                        "Keybind Configurator",
+                        key="nav-keybind-fallback",
+                        type="primary",
+                    ):
+                        st.session_state.selected_tool = "keybind_configurator"
+                        st.rerun()
+                    if st.button(
+                        "Bingo",
+                        key="nav-bingo-fallback",
+                        type="primary",
+                    ):
+                        st.session_state.selected_tool = "bingo"
+                        st.rerun()
             else:
-                st.markdown("Other Tools:")
-                if st.button("Keybind Configurator", key="nav-keyboard-configurator"):
+                st.markdown("**Other Features:**")
+                if st.button(
+                    "Keybind Configurator",
+                    key="nav-keyboard-configurator",
+                    type="primary",
+                ):
                     st.session_state.app_page = "tools"
                     st.session_state.selected_tool = "keybind_configurator"
+                    st.rerun()
+                if st.button("Bingo", key="nav-bingo", type="primary"):
+                    st.session_state.app_page = "tools"
+                    st.session_state.selected_tool = "bingo"
                     st.rerun()
 
         st.divider()

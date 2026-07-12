@@ -1,0 +1,35 @@
+-- Replace bingo_teams display names with real leaderboard player IDs.
+
+TRUNCATE bingo_teams;
+
+INSERT INTO bingo_teams (player_id, display_name, team) VALUES
+    ('mUdeR3emV3D0imF6t93ODeON50uw', 'Zennan', 'Eve'),
+    ('37sx5ImA7o4hJl7qnTY22kWzcAyH', 'm', 'Eve'),
+    ('FBCDmx4SwL6AkDHnL1Z0cD4RaYkw', 'steelce', 'Eve'),
+    ('hpy46N8yG1Lu3Osad4HGURJRtWSr', 'BurgerMinus', 'Eve'),
+    ('mxtjpmg0nGF1c4GlcErRA81mGG28', ':treblesat:', 'Eve'),
+    ('6JtdQWRLzAlaCSKgTS6MUkpgQ17U', 'Flowery', 'Eve'),
+    ('e4KF6nuqBNKjeyae2sSYzno28pEI', 'Vaporeon', 'Eve'),
+    ('8qRQkcjFnMKZzsqvyEhJWdCl1CRv', 'Weeb Shortz', 'Eve'),
+    ('5kApL7CuTC389Eui4naO36Y68ckU', 'F43555', 'Eve'),
+    ('qr1KR66rUSqwzpLUpSH7tHQpOaQ8', 'alex schmalex', 'Eve'),
+    ('KWs7rbQjAXUQP1jVpuzrvlVpTgqP', 'Arbitrary', 'Grace'),
+    ('Ogb6FSSh7U3miuk1HRNpphqgkbhF', 'NULL', 'Grace'),
+    ('wimEZieSVCUwzZ0qlNzerh5xQ3oD', 'melike_cookiecake', 'Grace'),
+    ('EQ1uckpddDun4NnOEd1kamlXD9Yr', 'Pringles', 'Grace'),
+    ('EDFlelylGwq1MPY61mjuBcFLfD01', 'Metalhead\m/', 'Grace'),
+    ('5Rcrnc3PZrd1GgNkfY6BM1ccYhpb', 'asymmetric', 'Grace'),
+    ('jWaNUUUI0sNWxAFDp06BngYcokBh', 'Mash0u0', 'Grace'),
+    ('DEm4WwDN8fgeGLlsQVFBM04Ujtg2', 'terry', 'Grace'),
+    ('d4lobXBPA3jGVHYzBfb2aF3RgijL', 'branstonbakesbeans', 'Grace'),
+    ('XyukTc7yBC98Pax9uE4rrUCepEPD', 'Zachava', 'Grace'),
+    ('iQWhn0lri3sH3bMEXaE68y87WJ0N', 'bobob13131', 'Rest'),
+    ('stcvViUHGUtbawyk9Qyv3rB0DCvK', 'TeamGames', 'Rest'),
+    ('d4CbRHm2Ln5HOt3drDz31J8MEk9e', 'hotsauceinramen', 'Rest'),
+    ('OJH0y4N5hhU9wVYIfApSFzixCMIZ', 'Trumpet_Boi_208', 'Rest'),
+    ('Eg1PZSGg5GQuc8oID0LBBs7Ix0KN', 'FacadeNico', 'Rest'),
+    ('230iE0zZmcWfSLabVyCYPQIJcFKv', 'jjules.', 'Rest'),
+    ('pHLwBehLgbrjZSsyx4ELXsLxHPdU', 'Lichtbaulb', 'Rest'),
+    ('1H2wmJ2NsXfxzyGs6AJKveJwM98W', 'Simply Resharkable', 'Rest'),
+    ('X1tbIRJSqZT1K8apERbvT4fI8QEo', 'Stefyfresh', 'Rest'),
+    ('UHpjuLr28FwQs1ZteLF2A8UtkSwz', 'ellie', 'Rest');
