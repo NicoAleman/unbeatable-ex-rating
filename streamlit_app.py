@@ -1736,6 +1736,46 @@ matching the in-game display.
 def _init_app_session_state() -> None:
     if "app_page" not in st.session_state:
         st.session_state.app_page = "ex_rating"
+    if "selected_tool" not in st.session_state:
+        st.session_state.selected_tool = "keybind_configurator"
+    _apply_navigation_query_params()
+
+
+def _apply_navigation_query_params() -> None:
+    """Honor deep links such as ?page=bingo on first load and shared URLs."""
+    page = st.query_params.get("page", "").strip().lower()
+    if not page:
+        return
+    if page == "bingo":
+        st.session_state.app_page = "tools"
+        st.session_state.selected_tool = "bingo"
+    elif page in {"keybind", "keybinds", "keybind_configurator", "tools"}:
+        st.session_state.app_page = "tools"
+        st.session_state.selected_tool = "keybind_configurator"
+    elif page in {"ex_rating", "rating", "home"}:
+        st.session_state.app_page = "ex_rating"
+
+
+def _go_to_ex_rating_page() -> None:
+    st.session_state.app_page = "ex_rating"
+    st.query_params.clear()
+    st.rerun()
+
+
+def _go_to_keybind_page() -> None:
+    st.session_state.app_page = "tools"
+    st.session_state.selected_tool = "keybind_configurator"
+    st.query_params.clear()
+    st.query_params["page"] = "keybind"
+    st.rerun()
+
+
+def _go_to_bingo_page() -> None:
+    st.session_state.app_page = "tools"
+    st.session_state.selected_tool = "bingo"
+    st.query_params.clear()
+    st.query_params["page"] = "bingo"
+    st.rerun()
 
 
 def _render_page_header(
@@ -1770,8 +1810,7 @@ def _render_main_tools_nav() -> None:
         with st.container(key="tool-picker", horizontal=True, gap="small"):
             if st.session_state.app_page == "tools":
                 if st.button("Back to EX Rating", key="nav-back-ex-rating"):
-                    st.session_state.app_page = "ex_rating"
-                    st.rerun()
+                    _go_to_ex_rating_page()
                 selected = st.session_state.get("selected_tool", "keybind_configurator")
                 if selected == "keybind_configurator":
                     st.button(
@@ -1785,16 +1824,14 @@ def _render_main_tools_nav() -> None:
                         key="nav-bingo-from-tools",
                         type="primary",
                     ):
-                        st.session_state.selected_tool = "bingo"
-                        st.rerun()
+                        _go_to_bingo_page()
                 elif selected == "bingo":
                     if st.button(
                         "Keybind Configurator",
                         key="nav-keybind-from-bingo",
                         type="primary",
                     ):
-                        st.session_state.selected_tool = "keybind_configurator"
-                        st.rerun()
+                        _go_to_keybind_page()
                     st.button(
                         "Bingo",
                         key="nav-bingo-active",
@@ -1807,15 +1844,13 @@ def _render_main_tools_nav() -> None:
                         key="nav-keybind-fallback",
                         type="primary",
                     ):
-                        st.session_state.selected_tool = "keybind_configurator"
-                        st.rerun()
+                        _go_to_keybind_page()
                     if st.button(
                         "Bingo",
                         key="nav-bingo-fallback",
                         type="primary",
                     ):
-                        st.session_state.selected_tool = "bingo"
-                        st.rerun()
+                        _go_to_bingo_page()
             else:
                 st.markdown("**Other Features:**")
                 if st.button(
@@ -1823,13 +1858,9 @@ def _render_main_tools_nav() -> None:
                     key="nav-keyboard-configurator",
                     type="primary",
                 ):
-                    st.session_state.app_page = "tools"
-                    st.session_state.selected_tool = "keybind_configurator"
-                    st.rerun()
+                    _go_to_keybind_page()
                 if st.button("Bingo", key="nav-bingo", type="primary"):
-                    st.session_state.app_page = "tools"
-                    st.session_state.selected_tool = "bingo"
-                    st.rerun()
+                    _go_to_bingo_page()
 
         st.divider()
 
