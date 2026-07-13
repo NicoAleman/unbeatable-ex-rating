@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 import urllib.error
 import urllib.parse
@@ -174,3 +175,49 @@ def delete_bingo_score_proof(proof_path: str) -> None:
             pass
     except Exception:
         return
+
+
+def create_bingo_proof_signed_url(
+    proof_path: str,
+    *,
+    expires_in: int = 3600,
+) -> str | None:
+    """Return a time-limited URL for viewing a private proof object."""
+    if not proof_path or not supabase_storage_configured():
+        return None
+
+    base_url = get_supabase_url()
+    service_role_key = get_supabase_service_role_key()
+    if not base_url or not service_role_key:
+        return None
+
+    sign_url = (
+        f"{base_url.rstrip('/')}/storage/v1/object/sign/{BINGO_PROOF_BUCKET}/"
+        f"{urllib.parse.quote(proof_path, safe='/')}"
+    )
+    request = urllib.request.Request(
+        sign_url,
+        data=json.dumps({"expiresIn": max(1, int(expires_in))}).encode("utf-8"),
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {service_role_key}",
+            "Content-Type": "application/json",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except Exception:
+        return None
+
+    signed = payload.get("signedURL") or payload.get("signedUrl")
+    if not signed:
+        return None
+    signed = str(signed)
+    if signed.startswith("http://") or signed.startswith("https://"):
+        return signed
+    if signed.startswith("/object/"):
+        return f"{base_url.rstrip('/')}/storage/v1{signed}"
+    if signed.startswith("/storage/v1/"):
+        return f"{base_url.rstrip('/')}{signed}"
+    return f"{base_url.rstrip('/')}{signed}"

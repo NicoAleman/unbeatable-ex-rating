@@ -45,6 +45,8 @@ from rating.bingo import (
     load_bingo_teams_by_ex_rating,
     submit_bingo_score,
 )
+from rating.bingo_proof_storage import create_bingo_proof_signed_url
+from rating.constants import SCORE_SOURCE_IN_GAME, SCORE_SOURCE_SUBMISSION
 from rating.formatting import format_difficulty_display_name
 from rating.supabase_config import supabase_configured, supabase_storage_configured
 
@@ -1451,6 +1453,117 @@ def build_bingo_board_css() -> str:
         font-weight: 800;
         font-variant-numeric: tabular-nums;
         text-align: right !important;
+    }}
+    .bingo-chart-modal-proof-col {{
+        width: 2rem;
+        min-width: 2rem;
+        text-align: center !important;
+        padding-left: 0.2rem !important;
+        padding-right: 0.35rem !important;
+    }}
+    .bingo-chart-modal-table th.bingo-chart-modal-proof-col {{
+        color: transparent;
+        font-size: 0;
+        user-select: none;
+    }}
+    .bingo-chart-modal-proof-badge,
+    .bingo-chart-modal-proof-btn {{
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 1.15rem;
+        height: 1.15rem;
+        flex: 0 0 auto;
+        border-radius: 999px;
+        box-sizing: border-box;
+    }}
+    .bingo-chart-modal-proof-badge {{
+        font-size: 0.72rem;
+        font-weight: 800;
+        line-height: 1;
+    }}
+    .bingo-chart-modal-proof-badge--ingame {{
+        background: rgba(94, 224, 154, 0.22);
+        color: #5ee09a;
+        border: 1px solid rgba(94, 224, 154, 0.55);
+    }}
+    .bingo-chart-modal-proof-badge--missing {{
+        background: rgba(245, 213, 71, 0.14);
+        color: rgba(245, 213, 71, 0.92);
+        border: 1px solid rgba(245, 213, 71, 0.38);
+    }}
+    .bingo-chart-modal-proof-btn {{
+        padding: 0;
+        border: 1px solid rgba(110, 176, 255, 0.42);
+        background: rgba(110, 176, 255, 0.14);
+        color: #9ec8ff;
+        cursor: pointer;
+    }}
+    .bingo-chart-modal-proof-btn:hover {{
+        background: rgba(110, 176, 255, 0.24);
+        color: #d7eaff;
+    }}
+    .bingo-chart-modal-proof-btn svg {{
+        width: 0.78rem;
+        height: 0.78rem;
+        display: block;
+    }}
+    .bingo-proof-modal-overlay {{
+        position: fixed;
+        inset: 0;
+        z-index: 1000001;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 180ms ease;
+    }}
+    .bingo-proof-modal-overlay.is-open {{
+        opacity: 1;
+        pointer-events: auto;
+    }}
+    .bingo-proof-modal-backdrop {{
+        position: absolute;
+        inset: 0;
+        border: 0;
+        background: rgba(4, 8, 18, 0.82);
+        cursor: pointer;
+        z-index: 0;
+    }}
+    .bingo-proof-modal-panel {{
+        position: relative;
+        z-index: 2;
+        max-width: min(92vw, 960px);
+        max-height: min(88vh, 920px);
+        padding: 0.75rem;
+        border-radius: 0.75rem;
+        border: 1px solid rgba(120, 190, 255, 0.24);
+        background: rgba(12, 18, 36, 0.96);
+        box-shadow: 0 18px 48px rgba(0, 0, 0, 0.45);
+    }}
+    .bingo-proof-modal-close {{
+        position: absolute;
+        top: 0.35rem;
+        right: 0.45rem;
+        border: 0;
+        background: transparent;
+        color: rgba(245, 245, 245, 0.72);
+        font-size: 1.5rem;
+        line-height: 1;
+        cursor: pointer;
+    }}
+    .bingo-proof-modal-close:hover {{
+        color: #ffffff;
+    }}
+    .bingo-proof-modal-image {{
+        display: block;
+        max-width: min(88vw, 920px);
+        max-height: min(82vh, 860px);
+        width: auto;
+        height: auto;
+        margin: 0 auto;
+        border-radius: 0.35rem;
     }}
     .bingo-chart-modal-empty {{
         padding: 1.25rem 0.5rem;
@@ -3697,6 +3810,117 @@ def _bingo_board_component_css(*, cols: int, rows: int) -> str:
         font-variant-numeric: tabular-nums;
         text-align: right !important;
     }}
+    .bingo-chart-modal-proof-col {{
+        width: 2rem;
+        min-width: 2rem;
+        text-align: center !important;
+        padding-left: 0.2rem !important;
+        padding-right: 0.35rem !important;
+    }}
+    .bingo-chart-modal-table th.bingo-chart-modal-proof-col {{
+        color: transparent;
+        font-size: 0;
+        user-select: none;
+    }}
+    .bingo-chart-modal-proof-badge,
+    .bingo-chart-modal-proof-btn {{
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 1.15rem;
+        height: 1.15rem;
+        flex: 0 0 auto;
+        border-radius: 999px;
+        box-sizing: border-box;
+    }}
+    .bingo-chart-modal-proof-badge {{
+        font-size: 0.72rem;
+        font-weight: 800;
+        line-height: 1;
+    }}
+    .bingo-chart-modal-proof-badge--ingame {{
+        background: rgba(94, 224, 154, 0.22);
+        color: #5ee09a;
+        border: 1px solid rgba(94, 224, 154, 0.55);
+    }}
+    .bingo-chart-modal-proof-badge--missing {{
+        background: rgba(245, 213, 71, 0.14);
+        color: rgba(245, 213, 71, 0.92);
+        border: 1px solid rgba(245, 213, 71, 0.38);
+    }}
+    .bingo-chart-modal-proof-btn {{
+        padding: 0;
+        border: 1px solid rgba(110, 176, 255, 0.42);
+        background: rgba(110, 176, 255, 0.14);
+        color: #9ec8ff;
+        cursor: pointer;
+    }}
+    .bingo-chart-modal-proof-btn:hover {{
+        background: rgba(110, 176, 255, 0.24);
+        color: #d7eaff;
+    }}
+    .bingo-chart-modal-proof-btn svg {{
+        width: 0.78rem;
+        height: 0.78rem;
+        display: block;
+    }}
+    .bingo-proof-modal-overlay {{
+        position: fixed;
+        inset: 0;
+        z-index: 1001;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 180ms ease;
+    }}
+    .bingo-proof-modal-overlay.is-open {{
+        opacity: 1;
+        pointer-events: auto;
+    }}
+    .bingo-proof-modal-backdrop {{
+        position: absolute;
+        inset: 0;
+        border: 0;
+        background: rgba(4, 8, 18, 0.82);
+        cursor: pointer;
+        z-index: 0;
+    }}
+    .bingo-proof-modal-panel {{
+        position: relative;
+        z-index: 2;
+        max-width: min(92vw, 960px);
+        max-height: min(88vh, 920px);
+        padding: 0.75rem;
+        border-radius: 0.75rem;
+        border: 1px solid rgba(120, 190, 255, 0.24);
+        background: rgba(12, 18, 36, 0.96);
+        box-shadow: 0 18px 48px rgba(0, 0, 0, 0.45);
+    }}
+    .bingo-proof-modal-close {{
+        position: absolute;
+        top: 0.35rem;
+        right: 0.45rem;
+        border: 0;
+        background: transparent;
+        color: rgba(245, 245, 245, 0.72);
+        font-size: 1.5rem;
+        line-height: 1;
+        cursor: pointer;
+    }}
+    .bingo-proof-modal-close:hover {{
+        color: #ffffff;
+    }}
+    .bingo-proof-modal-image {{
+        display: block;
+        max-width: min(88vw, 920px);
+        max-height: min(82vh, 860px);
+        width: auto;
+        height: auto;
+        margin: 0 auto;
+        border-radius: 0.35rem;
+    }}
     .bingo-chart-modal-empty {{
         padding: 1.25rem 0.5rem;
         color: rgba(234, 234, 234, 0.72);
@@ -3742,6 +3966,13 @@ def _build_bingo_board_interactive_html(
             </div>
           </div>
         </div>
+        <div id="bingo-proof-modal" class="bingo-proof-modal-overlay" aria-hidden="true">
+          <button type="button" class="bingo-proof-modal-backdrop" aria-label="Close proof image"></button>
+          <div class="bingo-proof-modal-panel" role="dialog" aria-modal="true" aria-label="Score proof">
+            <button type="button" class="bingo-proof-modal-close" aria-label="Close">&times;</button>
+            <img class="bingo-proof-modal-image" src="" alt="Score proof screenshot" />
+          </div>
+        </div>
         <script>
         (function () {{
           const root = document.getElementById("bingo-board-root");
@@ -3749,15 +3980,32 @@ def _build_bingo_board_interactive_html(
           const snapshotLabel = {snapshot_json};
           const updatedMs = {updated_ms_json};
           const modal = document.getElementById("bingo-chart-modal");
+          const proofModal = document.getElementById("bingo-proof-modal");
           const titleEl = modal.querySelector(".bingo-chart-modal-title");
           const subtitleEl = modal.querySelector(".bingo-chart-modal-subtitle");
           const bodyEl = modal.querySelector(".bingo-chart-modal-body");
           const backdropEl = modal.querySelector(".bingo-chart-modal-backdrop");
           const closeEl = modal.querySelector(".bingo-chart-modal-close");
+          const proofImageEl = proofModal.querySelector(".bingo-proof-modal-image");
+          const proofBackdropEl = proofModal.querySelector(".bingo-proof-modal-backdrop");
+          const proofCloseEl = proofModal.querySelector(".bingo-proof-modal-close");
           let lastFocused = null;
           let subtitleTimer = null;
           let closeTimer = null;
           const MODAL_ANIM_MS = 220;
+
+          function closeProofModal() {{
+            proofModal.classList.remove("is-open");
+            proofModal.setAttribute("aria-hidden", "true");
+            proofImageEl.removeAttribute("src");
+          }}
+
+          function openProofModal(url) {{
+            proofImageEl.src = url;
+            proofModal.classList.add("is-open");
+            proofModal.setAttribute("aria-hidden", "false");
+            proofCloseEl.focus();
+          }}
 
           function formatAgo(ms) {{
             const seconds = Math.max(0, Math.floor((Date.now() - ms) / 1000));
@@ -3809,6 +4057,7 @@ def _build_bingo_board_interactive_html(
           }}
 
           function closeModal() {{
+            closeProofModal();
             if (!modal.classList.contains("is-open") || modal.classList.contains("is-closing")) {{
               return;
             }}
@@ -3865,7 +4114,25 @@ def _build_bingo_board_interactive_html(
           }});
           backdropEl.addEventListener("click", closeModal);
           closeEl.addEventListener("click", closeModal);
+          bodyEl.addEventListener("click", (event) => {{
+            const proofBtn = event.target.closest(".bingo-chart-modal-proof-btn");
+            if (!proofBtn) {{
+              return;
+            }}
+            event.preventDefault();
+            event.stopPropagation();
+            const proofUrl = proofBtn.dataset.proofUrl;
+            if (proofUrl) {{
+              openProofModal(proofUrl);
+            }}
+          }});
+          proofBackdropEl.addEventListener("click", closeProofModal);
+          proofCloseEl.addEventListener("click", closeProofModal);
           document.addEventListener("keydown", (event) => {{
+            if (event.key === "Escape" && proofModal.classList.contains("is-open")) {{
+              closeProofModal();
+              return;
+            }}
             if (event.key === "Escape" && modal.classList.contains("is-open")) {{
               closeModal();
             }}
@@ -3912,6 +4179,44 @@ def _render_bingo_board_component(
     )
 
 
+def _bingo_chart_proof_icon_html(entry: BingoChartLeaderboardEntry) -> str:
+    if entry.score <= 0:
+        return ""
+
+    if entry.source == SCORE_SOURCE_IN_GAME:
+        return (
+            '<span class="bingo-chart-modal-proof-badge bingo-chart-modal-proof-badge--ingame" '
+            'title="In-game score" aria-label="In-game score">'
+            "&#10003;"
+            "</span>"
+        )
+
+    if entry.source == SCORE_SOURCE_SUBMISSION:
+        if entry.proof_path:
+            proof_url = create_bingo_proof_signed_url(entry.proof_path)
+            if proof_url:
+                return (
+                    '<button type="button" class="bingo-chart-modal-proof-btn" '
+                    f'data-proof-url="{html.escape(proof_url, quote=True)}" '
+                    'title="View submitted proof" aria-label="View submitted proof">'
+                    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+                    'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" '
+                    'aria-hidden="true">'
+                    '<rect x="3" y="3" width="18" height="18" rx="2"></rect>'
+                    '<circle cx="8.5" cy="8.5" r="1.5"></circle>'
+                    '<path d="M21 15l-5-5L5 21"></path>'
+                    "</svg></button>"
+                )
+        return (
+            '<span class="bingo-chart-modal-proof-badge bingo-chart-modal-proof-badge--missing" '
+            'title="No proof submitted" aria-label="No proof submitted">'
+            "?"
+            "</span>"
+        )
+
+    return ""
+
+
 def _render_bingo_chart_leaderboard_table_html(
     entries: list[BingoChartLeaderboardEntry],
 ) -> str:
@@ -3930,12 +4235,14 @@ def _render_bingo_chart_leaderboard_table_html(
         team_color = TEAM_TEXT_COLORS.get(entry.team, "#eaeaea")
         player = html.escape(entry.display_name)
         score = html.escape(format_leader_score(entry.score))
+        proof_icon = _bingo_chart_proof_icon_html(entry)
         rows.append(
             "<tr>"
             f'<td class="bingo-chart-modal-rank">{rank}</td>'
             f'<td class="bingo-chart-modal-player" style="color:{team_color};">'
             f"{player}</td>"
             f'<td class="bingo-chart-modal-score">{score}</td>'
+            f'<td class="bingo-chart-modal-proof-col">{proof_icon}</td>'
             "</tr>"
         )
     return (
@@ -3945,6 +4252,7 @@ def _render_bingo_chart_leaderboard_table_html(
         '<th class="bingo-chart-modal-rank">#</th>'
         '<th class="bingo-chart-modal-player">Player</th>'
         '<th class="bingo-chart-modal-score">Score</th>'
+        '<th class="bingo-chart-modal-proof-col" aria-label="Proof"></th>'
         "</tr></thead>"
         f"<tbody>{''.join(rows)}</tbody>"
         "</table>"

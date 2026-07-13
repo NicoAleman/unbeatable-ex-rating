@@ -61,6 +61,8 @@ class BingoChartLeaderboardEntry:
     display_name: str
     team: str
     score: int
+    source: str | None = None
+    proof_path: str | None = None
 
 
 @dataclass(frozen=True)
@@ -299,35 +301,37 @@ def load_bingo_chart_player_leaderboard(
                 if end_time is None:
                     cur.execute(
                         """
-                        SELECT
+                        SELECT DISTINCT ON (player_id)
                             player_id,
                             display_name,
                             team,
-                            MAX(score)::BIGINT AS best_score
+                            score,
+                            source,
+                            proof_path
                         FROM bingo_scores
                         WHERE song = %s
                           AND difficulty = %s
                           AND created_at >= %s
-                        GROUP BY player_id, display_name, team
-                        ORDER BY best_score DESC, LOWER(display_name) ASC
+                        ORDER BY player_id, score DESC, created_at DESC
                         """,
                         (song, difficulty, start_time),
                     )
                 else:
                     cur.execute(
                         """
-                        SELECT
+                        SELECT DISTINCT ON (player_id)
                             player_id,
                             display_name,
                             team,
-                            MAX(score)::BIGINT AS best_score
+                            score,
+                            source,
+                            proof_path
                         FROM bingo_scores
                         WHERE song = %s
                           AND difficulty = %s
                           AND created_at >= %s
                           AND created_at < %s
-                        GROUP BY player_id, display_name, team
-                        ORDER BY best_score DESC, LOWER(display_name) ASC
+                        ORDER BY player_id, score DESC, created_at DESC
                         """,
                         (song, difficulty, start_time, end_time),
                     )
@@ -335,15 +339,19 @@ def load_bingo_chart_player_leaderboard(
     except psycopg2.errors.UndefinedTable:
         return []
 
-    return [
+    entries = [
         BingoChartLeaderboardEntry(
             player_id=str(row["player_id"]),
             display_name=str(row["display_name"]),
             team=str(row["team"]),
-            score=int(row["best_score"]),
+            score=int(row["score"]),
+            source=str(row["source"]) if row["source"] is not None else None,
+            proof_path=str(row["proof_path"]) if row["proof_path"] is not None else None,
         )
         for row in rows
     ]
+    entries.sort(key=lambda entry: (-entry.score, entry.display_name.casefold()))
+    return entries
 
 
 def load_all_bingo_chart_player_leaderboards(
@@ -362,35 +370,37 @@ def load_all_bingo_chart_player_leaderboards(
                 if end_time is None:
                     cur.execute(
                         """
-                        SELECT
+                        SELECT DISTINCT ON (song, difficulty, player_id)
                             song,
                             difficulty,
                             player_id,
                             display_name,
                             team,
-                            MAX(score)::BIGINT AS best_score
+                            score,
+                            source,
+                            proof_path
                         FROM bingo_scores
                         WHERE created_at >= %s
-                        GROUP BY song, difficulty, player_id, display_name, team
-                        ORDER BY song, difficulty, best_score DESC, LOWER(display_name) ASC
+                        ORDER BY song, difficulty, player_id, score DESC, created_at DESC
                         """,
                         (start_time,),
                     )
                 else:
                     cur.execute(
                         """
-                        SELECT
+                        SELECT DISTINCT ON (song, difficulty, player_id)
                             song,
                             difficulty,
                             player_id,
                             display_name,
                             team,
-                            MAX(score)::BIGINT AS best_score
+                            score,
+                            source,
+                            proof_path
                         FROM bingo_scores
                         WHERE created_at >= %s
                           AND created_at < %s
-                        GROUP BY song, difficulty, player_id, display_name, team
-                        ORDER BY song, difficulty, best_score DESC, LOWER(display_name) ASC
+                        ORDER BY song, difficulty, player_id, score DESC, created_at DESC
                         """,
                         (start_time, end_time),
                     )
@@ -406,9 +416,15 @@ def load_all_bingo_chart_player_leaderboards(
                 player_id=str(row["player_id"]),
                 display_name=str(row["display_name"]),
                 team=str(row["team"]),
-                score=int(row["best_score"]),
+                score=int(row["score"]),
+                source=str(row["source"]) if row["source"] is not None else None,
+                proof_path=(
+                    str(row["proof_path"]) if row["proof_path"] is not None else None
+                ),
             )
         )
+    for entries in result.values():
+        entries.sort(key=lambda entry: (-entry.score, entry.display_name.casefold()))
     return result
 
 
