@@ -46,7 +46,7 @@ from rating.bingo import (
     submit_bingo_score,
 )
 from rating.formatting import format_difficulty_display_name
-from rating.supabase_config import supabase_configured
+from rating.supabase_config import supabase_configured, supabase_storage_configured
 
 # Slightly darker than the app background (#0c0e29).
 BINGO_CELL_BG = "#07091a"
@@ -57,6 +57,8 @@ BINGO_CHART_SELECT_PLACEHOLDER = "— Select a chart —"
 BINGO_SEARCH_LIMIT = 50
 BINGO_ACTIVITY_FEED_LIMIT = 30
 BINGO_ACTIVITY_FEED_VISIBLE_COUNT = 6
+# Temporary: show manual submission panel before the game starts (for testing).
+BINGO_MANUAL_SUBMISSION_FORCE_VISIBLE = False
 TEAM_CELL_BACKGROUNDS = {
     "Eve": "#0f1f3a",
     "Grace": "#2a1218",
@@ -2521,19 +2523,29 @@ def _render_bingo_manual_submission(
 
 
     with st.container(border=True, key="bingo_submit_panel"):
+        if "bingo_proof_upload_reset_id" not in st.session_state:
+            st.session_state.bingo_proof_upload_reset_id = 0
+
         success_message = st.session_state.pop("bingo_submit_success", None)
         if success_message:
             st.success(success_message)
+            st.session_state.bingo_proof_upload_reset_id += 1
 
         st.markdown(
             """
             <div class="bingo-submit-title">Submit a Score</div>
             <div class="bingo-submit-note">
-              Please take a screenshot of the results screen in case verification is needed.
+              Upload a screenshot of the results screen as proof. PNG, JPEG, or WebP up to 50 MB.
             </div>
             """,
             unsafe_allow_html=True,
         )
+
+        if not supabase_storage_configured():
+            st.warning(
+                "Proof uploads require `supabase.url` and `supabase.service_role_key` "
+                "in secrets (or `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` in the environment)."
+            )
 
         player_col, chart_col = st.columns(2, gap="medium")
 
@@ -2671,6 +2683,14 @@ def _render_bingo_manual_submission(
                 selected_chart.difficulty,
             )
 
+        proof_file = st.file_uploader(
+            "Proof screenshot",
+            type=["png", "jpg", "jpeg", "webp"],
+            max_upload_size=50,
+            key=f"bingo-submit-proof-{st.session_state.bingo_proof_upload_reset_id}",
+            disabled=selected_player is None or selected_chart is None,
+        )
+
         # Side spacers keep the score field + button as a tight centered pair.
         _left, score_col, btn_col, _right = st.columns(
             [1.4, 2.1, 1.15, 1.4],
@@ -2698,10 +2718,12 @@ def _render_bingo_manual_submission(
         can_submit = (
             selected_player is not None
             and selected_chart is not None
+            and proof_file is not None
             and not score_invalid
             and not score_not_higher
             and not submission_in_progress
             and supabase_configured()
+            and supabase_storage_configured()
         )
         with btn_col:
             submitted = st.button(
@@ -2730,12 +2752,15 @@ def _render_bingo_manual_submission(
             and not submission_in_progress
             and selected_player is not None
             and selected_chart is not None
+            and proof_file is not None
         ):
             st.session_state.bingo_pending_submission = {
                 "player_id": selected_player.player_id,
                 "song": selected_chart.song,
                 "difficulty": selected_chart.difficulty,
                 "score": score_value,
+                "proof_bytes": proof_file.getvalue(),
+                "proof_filename": proof_file.name,
             }
             st.session_state.bingo_submission_in_progress = True
             # One app rerun: spinner covers save + board/scoreboard reload.
@@ -4076,6 +4101,9 @@ def _commit_pending_bingo_submission() -> None:
         song=pending["song"],
         difficulty=pending["difficulty"],
         score=int(pending["score"]),
+        require_proof=True,
+        proof_bytes=pending.get("proof_bytes"),
+        proof_filename=pending.get("proof_filename"),
     )
     st.session_state.bingo_submission_in_progress = False
     if ok:
@@ -4193,7 +4221,7 @@ def render_bingo_board() -> None:
             )
             is not None
         )
-        if game_is_live:
+        if game_is_live or BINGO_MANUAL_SUBMISSION_FORCE_VISIBLE:
             _render_bingo_manual_submission(
                 charts=charts,
                 teams=teams,

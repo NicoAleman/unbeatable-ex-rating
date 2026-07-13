@@ -834,6 +834,9 @@ def submit_bingo_score(
     score: int,
     source: str | None = None,
     require_live: bool = False,
+    require_proof: bool = False,
+    proof_bytes: bytes | None = None,
+    proof_filename: str | None = None,
     accuracy: float | None = None,
     critical: int | None = None,
     perfect: int | None = None,
@@ -848,6 +851,10 @@ def submit_bingo_score(
 
     Returns (success, message).
     """
+    from rating.bingo_proof_storage import (
+        delete_bingo_score_proof,
+        upload_bingo_score_proof,
+    )
     from rating.constants import SCORE_SOURCE_IN_GAME, SCORE_SOURCE_SUBMISSION
 
     score_source = source or SCORE_SOURCE_SUBMISSION
@@ -898,6 +905,10 @@ def submit_bingo_score(
     if chart is None:
         return False, "That chart is not on the current Bingo board."
 
+    if require_proof and not proof_bytes:
+        return False, "Proof screenshot is required."
+
+    uploaded_proof_path: str | None = None
     try:
         with _connect(db_url) as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
@@ -937,13 +948,26 @@ def submit_bingo_score(
                         f"({format_leader_score(current_best)}).",
                     )
 
+                if proof_bytes:
+                    try:
+                        uploaded_proof_path = upload_bingo_score_proof(
+                            display_name=str(player["display_name"]),
+                            chart_display_name=chart.display_name,
+                            difficulty=difficulty,
+                            score=score_value,
+                            data=proof_bytes,
+                            filename=proof_filename,
+                        ).proof_path
+                    except (ValueError, RuntimeError) as exc:
+                        return False, str(exc)
+
                 cur.execute(
                     """
                     INSERT INTO bingo_scores (
                         player_id, display_name, team, song, difficulty,
                         score, accuracy, critical, perfect, great, good, okay,
-                        barely, miss, source
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        barely, miss, source, proof_path
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         player["player_id"],
@@ -961,12 +985,17 @@ def submit_bingo_score(
                         barely,
                         miss,
                         score_source,
+                        uploaded_proof_path,
                     ),
                 )
             conn.commit()
     except psycopg2.errors.UndefinedTable:
+        if uploaded_proof_path:
+            delete_bingo_score_proof(uploaded_proof_path)
         return False, "Bingo tables are not available."
     except Exception as exc:
+        if uploaded_proof_path:
+            delete_bingo_score_proof(uploaded_proof_path)
         return False, f"Could not save score: {exc}"
 
     return (
