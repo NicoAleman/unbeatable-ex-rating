@@ -1758,6 +1758,9 @@ def build_bingo_board_css() -> str:
         padding: 1.25rem 1.25rem 1.1rem;
         box-sizing: border-box;
     }}
+    .bingo-chart-completions-modal .bingo-chart-modal-panel {{
+        width: min(100%, 960px);
+    }}
     {_BINGO_CHART_MODAL_SCROLLBAR_CSS}
     .bingo-chart-modal-close {{
         position: absolute;
@@ -3426,6 +3429,321 @@ def _render_bingo_manual_submission(
         submit_error = st.session_state.pop("bingo_submit_error", None)
         if submit_error:
             st.error(submit_error)
+
+
+def _bingo_player_chart_completion_counts(
+    *,
+    board_charts: list[BingoChart],
+    leaderboard_by_chart: dict[tuple[str, str], list[BingoChartLeaderboardEntry]],
+    teams: dict[str, list[BingoTeamPlayer]],
+) -> dict[str, int]:
+    """Return {player_id: completed chart count} for roster players (score > 0)."""
+    completed_by_player: dict[str, int] = {
+        player.player_id: 0 for player in _flatten_bingo_players(teams)
+    }
+    for chart in board_charts:
+        key = (chart.song, chart.difficulty)
+        for entry in leaderboard_by_chart.get(key, []):
+            if entry.score > 0:
+                completed_by_player[entry.player_id] = (
+                    completed_by_player.get(entry.player_id, 0) + 1
+                )
+    return completed_by_player
+
+
+def _bingo_chart_completions_count_html(completed: int, *, total_charts: int) -> str:
+    suffix = html.escape(f" / {total_charts}")
+    if completed >= total_charts:
+        return f"{html.escape(str(completed))}{suffix}"
+    if completed == 0:
+        return (
+            '<span class="bingo-completions-count bingo-completions-count--zero">0</span>'
+            f"{suffix}"
+        )
+    return (
+        f'<span class="bingo-completions-count bingo-completions-count--incomplete">'
+        f"{html.escape(str(completed))}</span>{suffix}"
+    )
+
+
+def _render_bingo_chart_completions_table_html(
+    teams: dict[str, list[BingoTeamPlayer]],
+    *,
+    completed_by_player: dict[str, int],
+    total_charts: int,
+    highlight_player_id: str | None = None,
+) -> str:
+    if not any(teams.get(team) for team in TEAM_ORDER):
+        return (
+            '<div class="bingo-chart-modal-empty">'
+            "No players are on the bingo roster yet."
+            "</div>"
+        )
+
+    team_blocks: list[str] = []
+    for team in TEAM_ORDER:
+        players = list(teams.get(team, []))
+        if not players:
+            continue
+        players.sort(
+            key=lambda player: (
+                -completed_by_player.get(player.player_id, 0),
+                player.display_name.casefold(),
+            )
+        )
+        team_color = TEAM_TEXT_COLORS.get(team, "#eaeaea")
+        rows: list[str] = []
+        for player in players:
+            completed = completed_by_player.get(player.player_id, 0)
+            row_classes: list[str] = []
+            if completed == 0:
+                row_classes.append("bingo-completions-row--zero")
+            if (
+                highlight_player_id is not None
+                and player.player_id == highlight_player_id
+            ):
+                row_classes.append("bingo-chart-modal-row--highlighted")
+            row_class = " ".join(row_classes)
+            row_attr = f' class="{html.escape(row_class)}"' if row_class else ""
+            rows.append(
+                f"<tr{row_attr}>"
+                f'<td class="bingo-chart-modal-player" style="color:{team_color};">'
+                f"{html.escape(player.display_name)}</td>"
+                f'<td class="bingo-chart-modal-score">'
+                f"{_bingo_chart_completions_count_html(completed, total_charts=total_charts)}"
+                "</td>"
+                "</tr>"
+            )
+        team_blocks.append(
+            '<div class="bingo-completions-team-block">'
+            f'<div class="bingo-completions-team-heading" style="color:{team_color};">'
+            f"Team {html.escape(_team_label(team))}</div>"
+            '<div class="bingo-chart-modal-table-wrap">'
+            '<table class="bingo-chart-modal-table bingo-completions-team-table">'
+            "<thead><tr>"
+            '<th class="bingo-chart-modal-player">Player</th>'
+            '<th class="bingo-chart-modal-score">Completed</th>'
+            "</tr></thead>"
+            f"<tbody>{''.join(rows)}</tbody>"
+            "</table>"
+            "</div>"
+            "</div>"
+        )
+
+    return (
+        '<style>'
+        ".bingo-completions-teams {"
+        "display: grid;"
+        "grid-template-columns: repeat(3, minmax(0, 1fr));"
+        "gap: 1rem;"
+        "align-items: start;"
+        "}"
+        ".bingo-completions-team-heading {"
+        "font-size: 1.05rem;"
+        "font-weight: 800;"
+        "letter-spacing: 0.03em;"
+        "text-decoration: underline;"
+        "text-underline-offset: 0.14em;"
+        "margin: 0.85rem 0 0.55rem 0;"
+        "text-align: center;"
+        "}"
+        ".bingo-completions-team-table .bingo-chart-modal-player {"
+        "width: auto;"
+        "max-width: none;"
+        "}"
+        ".bingo-completions-count--incomplete {"
+        "color: #ff7a84;"
+        "font-weight: 800;"
+        "}"
+        ".bingo-completions-count--zero {"
+        "color: #b83240;"
+        "font-weight: 800;"
+        "}"
+        ".bingo-completions-row--zero td {"
+        "background: rgba(184, 50, 64, 0.16);"
+        "}"
+        ".bingo-completions-row--zero.bingo-chart-modal-row--highlighted td {"
+        "background: rgba(184, 50, 64, 0.24);"
+        "}"
+        "@media (max-width: 820px) {"
+        ".bingo-completions-teams { grid-template-columns: 1fr; }"
+        "}"
+        "</style>"
+        '<div class="bingo-completions-teams">'
+        f"{''.join(team_blocks)}"
+        "</div>"
+    )
+
+
+def _render_bingo_chart_completions(
+    *,
+    charts: list[BingoChart],
+    teams: dict[str, list[BingoTeamPlayer]],
+    settings: BingoSettings,
+    highlight_player_id: str | None = None,
+) -> None:
+    if settings.start_time is None:
+        return
+
+    board_charts = bingo_charts_on_board(charts, int(settings.board_width or 5))
+    total_charts = len(board_charts)
+    if total_charts <= 0:
+        return
+
+    try:
+        leaderboard_by_chart = load_all_bingo_chart_player_leaderboards(
+            start_time=settings.start_time,
+        )
+    except Exception as exc:
+        st.error(f"Failed to load chart completions: {exc}")
+        return
+
+    completed_by_player = _bingo_player_chart_completion_counts(
+        board_charts=board_charts,
+        leaderboard_by_chart=leaderboard_by_chart,
+        teams=teams,
+    )
+    table_html = _render_bingo_chart_completions_table_html(
+        teams,
+        completed_by_player=completed_by_player,
+        total_charts=total_charts,
+        highlight_player_id=highlight_player_id,
+    )
+    table_html_json = json.dumps(table_html).replace("</", "<\\/")
+
+    st.markdown(
+        """
+        <style>
+        .st-key-bingo_chart_completions_launch {
+            width: min(100%, 1100px);
+            max-width: 100%;
+            margin: 0.35rem auto 0.5rem;
+        }
+        .st-key-bingo_chart_completions_launch [data-testid="stElementContainer"] {
+            margin: 0 !important;
+            padding: 0 !important;
+        }
+        .st-key-bingo_chart_completions_launch [data-testid="stCustomComponentV1"] {
+            width: 100% !important;
+            max-width: 100% !important;
+            margin: 0 !important;
+            padding: 0 !important;
+        }
+        .st-key-bingo_chart_completions_launch iframe {
+            width: 100% !important;
+            max-width: 100% !important;
+            border: none !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+    with st.container(key="bingo_chart_completions_launch"):
+        components.html(
+            f"""
+            <button type="button" class="bingo-completions-open-btn" id="bingo-completions-open">
+              Chart Completions
+            </button>
+            <style>
+              html, body {{
+                margin: 0;
+                padding: 0;
+                background: transparent !important;
+                overflow: hidden;
+              }}
+              .bingo-completions-open-btn {{
+                display: block;
+                margin: 0 auto;
+                padding: 0.55rem 1.15rem;
+                border-radius: 0.55rem;
+                border: 1px solid rgba(234, 234, 234, 0.22);
+                background: rgba(16, 22, 45, 0.92);
+                color: rgba(245, 245, 245, 0.96);
+                font-family: "Source Sans Pro", "Segoe UI", sans-serif;
+                font-size: 1rem;
+                font-weight: 700;
+                cursor: pointer;
+                line-height: 1.2;
+              }}
+              .bingo-completions-open-btn:hover {{
+                background: rgba(24, 32, 58, 0.98);
+                border-color: rgba(234, 234, 234, 0.32);
+              }}
+            </style>
+            <script>
+            (function () {{
+              const parentWin = window.parent;
+              const parentDoc = parentWin.document;
+              const tableHtml = {table_html_json};
+
+              function ensureModal() {{
+                let modal = parentDoc.getElementById("bingo-chart-completions-modal");
+                if (modal) {{
+                  return modal;
+                }}
+                modal = parentDoc.createElement("div");
+                modal.id = "bingo-chart-completions-modal";
+                modal.className = "bingo-chart-modal-overlay bingo-chart-completions-modal";
+                modal.setAttribute("aria-hidden", "true");
+                modal.innerHTML =
+                  '<button type="button" class="bingo-chart-modal-backdrop" aria-label="Close chart completions"></button>' +
+                  '<div class="bingo-chart-modal-panel" role="dialog" aria-modal="true" aria-labelledby="bingo-chart-completions-title">' +
+                  '<button type="button" class="bingo-chart-modal-close" aria-label="Close">&times;</button>' +
+                  '<div id="bingo-chart-completions-title" class="bingo-chart-modal-title">Chart Completions</div>' +
+                  '<div class="bingo-chart-modal-body"></div>' +
+                  "</div>";
+                parentDoc.body.appendChild(modal);
+                return modal;
+              }}
+
+              function closeModal(modal) {{
+                modal.classList.remove("is-open");
+                modal.classList.remove("is-closing");
+                modal.setAttribute("aria-hidden", "true");
+              }}
+
+              function openModal() {{
+                const modal = ensureModal();
+                modal.querySelector(".bingo-chart-modal-body").innerHTML = tableHtml;
+                modal.classList.add("is-open");
+                modal.setAttribute("aria-hidden", "false");
+                modal.querySelector(".bingo-chart-modal-close").focus();
+              }}
+
+              if (!parentWin.__bingoCompletionsModalListeners) {{
+                parentWin.__bingoCompletionsModalListeners = true;
+                parentDoc.addEventListener("click", (event) => {{
+                  const modal = parentDoc.getElementById("bingo-chart-completions-modal");
+                  if (!modal) {{
+                    return;
+                  }}
+                  if (event.target.closest("#bingo-chart-completions-modal .bingo-chart-modal-backdrop")
+                    || event.target.closest("#bingo-chart-completions-modal .bingo-chart-modal-close")) {{
+                    closeModal(modal);
+                  }}
+                }}, true);
+                parentDoc.addEventListener("keydown", (event) => {{
+                  const modal = parentDoc.getElementById("bingo-chart-completions-modal");
+                  if (!modal || !modal.classList.contains("is-open")) {{
+                    return;
+                  }}
+                  if (event.key === "Escape") {{
+                    closeModal(modal);
+                  }}
+                }}, true);
+              }}
+
+              const openBtn = document.getElementById("bingo-completions-open");
+              if (openBtn && openBtn.dataset.completionsReady !== "1") {{
+                openBtn.dataset.completionsReady = "1";
+                openBtn.addEventListener("click", openModal);
+              }}
+            }})();
+            </script>
+            """,
+            height=52,
+            scrolling=False,
+        )
 
 
 def _render_bingo_teams(teams: dict[str, list[BingoTeamPlayer]]) -> None:
@@ -5320,3 +5638,13 @@ def render_bingo_board() -> None:
                 settings=settings,
             )
         _render_bingo_teams(teams)
+        if game_is_live:
+            view_player = _resolve_bingo_view_player(teams)
+            _render_bingo_chart_completions(
+                charts=charts,
+                teams=teams,
+                settings=settings,
+                highlight_player_id=(
+                    view_player.player_id if view_player is not None else None
+                ),
+            )
