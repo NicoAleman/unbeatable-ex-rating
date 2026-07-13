@@ -4,6 +4,13 @@ from rating.constants import (
     RATING_COMPARISON_DECIMALS,
 )
 
+# Internal chart difficulty keys → in-game display names.
+DIFFICULTY_DISPLAY_NAMES = {
+    "Easy": "Normal",
+    "Normal": "Hard",
+    "Hard": "Expert",
+}
+
 
 def format_rating_display(value: float) -> str:
     return f"{value:.{DISPLAY_RATING_DECIMALS}f}"
@@ -35,6 +42,17 @@ def format_activity_rating_delta(prev_rating: float, new_rating: float) -> str |
     return format_potential_gain_display(
         as_stored_rating(new_rating) - as_stored_rating(prev_rating)
     )
+
+
+def format_difficulty_display_name(difficulty: str) -> str:
+    stripped = difficulty.strip()
+    mapped = DIFFICULTY_DISPLAY_NAMES.get(stripped)
+    if mapped is not None:
+        return mapped
+    for internal, display in DIFFICULTY_DISPLAY_NAMES.items():
+        if stripped.casefold() == internal.casefold():
+            return display
+    return stripped
 
 
 def format_song_display_name(raw_name: str, max_scores_path=None) -> str:

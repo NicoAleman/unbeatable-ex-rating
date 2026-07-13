@@ -63,6 +63,7 @@ TOP_N = constants_module.TOP_N
 format_rating_display = formatting_module.format_rating_display
 format_activity_rating_delta = formatting_module.format_activity_rating_delta
 format_song_display_name = formatting_module.format_song_display_name
+format_difficulty_display_name = formatting_module.format_difficulty_display_name
 potential_gains_from_perfect = board_module.potential_gains_from_perfect
 competition_ranks_for_values = board_module.competition_ranks_for_values
 format_rating_board_csv = board_module.format_rating_board_csv
@@ -915,7 +916,7 @@ def _render_potential_gains_expander(
                 {
                     "Rank": rank,
                     "Chart": format_song_display_name(entry.chart.song),
-                    "Difficulty": entry.chart.difficulty,
+                    "Difficulty": format_difficulty_display_name(entry.chart.difficulty),
                     "Level": entry.chart.level,
                     accuracy_column_label: (
                         entry.chart.ex_accuracy
@@ -1029,7 +1030,7 @@ def _ex_board_table_row(
     row: dict[str, object] = {
         "Rank": rank,
         "Chart": format_song_display_name(chart.song),
-        "Difficulty": chart.difficulty,
+        "Difficulty": format_difficulty_display_name(chart.difficulty),
         "Level": chart.level,
     }
     if include_accuracy:
@@ -1129,7 +1130,7 @@ def _render_rating_boards(
                         {
                             "Rank": rank,
                             "Chart": format_song_display_name(chart.song),
-                            "Difficulty": chart.difficulty,
+                            "Difficulty": format_difficulty_display_name(chart.difficulty),
                             "Level": chart.level,
                             "Accuracy": chart.standard_accuracy,
                             "Grade": chart.standard_grade,

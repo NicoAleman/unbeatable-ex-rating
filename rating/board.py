@@ -5,7 +5,11 @@ from pathlib import Path
 from dataclasses import dataclass
 
 from rating.constants import COMPLETION_BONUS, TOP_N
-from rating.formatting import format_rating_display, format_song_display_name
+from rating.formatting import (
+    format_difficulty_display_name,
+    format_rating_display,
+    format_song_display_name,
+)
 from rating.formulas import compute_grade_bonus, song_star_rating
 from rating.models import ChartRating
 
@@ -192,7 +196,7 @@ def _ex_row(rank: int, chart: ChartRating, *, include_accuracy: bool = True) -> 
     row = [
         rank,
         format_song_display_name(chart.song),
-        chart.difficulty,
+        format_difficulty_display_name(chart.difficulty),
         chart.level,
     ]
     if include_accuracy:
@@ -213,7 +217,7 @@ def _standard_row(rank: int, chart: ChartRating) -> list:
     return [
         rank,
         format_song_display_name(chart.song),
-        chart.difficulty,
+        format_difficulty_display_name(chart.difficulty),
         chart.level,
         f"{chart.standard_accuracy:.2f}",
         chart.standard_grade,

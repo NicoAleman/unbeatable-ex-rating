@@ -43,6 +43,7 @@ from rating.bingo import (
     load_bingo_teams_by_ex_rating,
     submit_bingo_score,
 )
+from rating.formatting import format_difficulty_display_name
 from rating.supabase_config import supabase_configured
 
 # Slightly darker than the app background (#0c0e29).
@@ -153,7 +154,7 @@ def _touch_bingo_live_updated() -> None:
 
 
 def _difficulty_label(difficulty: str, level: int | None) -> str:
-    diff = difficulty.upper()
+    diff = format_difficulty_display_name(difficulty).upper()
     if level is None:
         return f"[{diff}]"
     return f"[{diff} - {level}]"
@@ -1759,7 +1760,8 @@ def _render_bingo_claim_feed_item(event: BingoSquareClaimEvent) -> str:
     tint = TEAM_ACTIVITY_TINTS.get(event.team, "rgba(234, 234, 234, 0.06)")
     player = html.escape(event.player_display_name)
     chart = html.escape(
-        f"{event.chart_display_name} [{event.difficulty.upper()}]"
+        f"{event.chart_display_name} "
+        f"[{format_difficulty_display_name(event.difficulty).upper()}]"
     )
     time_ago = html.escape(_format_bingo_time_ago(event.created_at))
     if event.prev_team is None:
@@ -2180,6 +2182,8 @@ def _render_bingo_manual_submission(
                     if chart_needle in chart.display_name.casefold()
                     or chart_needle in chart.song.casefold()
                     or chart_needle in chart.difficulty.casefold()
+                    or chart_needle
+                    in format_difficulty_display_name(chart.difficulty).casefold()
                 ]
                 if not chart_matches:
                     st.caption("No board charts match your search.")
