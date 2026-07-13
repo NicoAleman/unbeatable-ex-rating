@@ -1292,17 +1292,30 @@ def seed_bingo_test_scores(
     *,
     score_min: int = 1_500_000,
     score_max: int = 1_800_000,
+    time_start: datetime | None = None,
+    time_end: datetime | None = None,
     db_url: str | None = None,
 ) -> int:
-    """Insert one random score per player per chart with times spread across day 1."""
+    """Insert one random score per player per chart with random created_at in a window."""
     import random
 
     settings = load_bingo_settings(db_url)
-    if settings is None or settings.start_time is None:
-        raise RuntimeError("bingo_settings.start_time is required to seed scores.")
+    if settings is None:
+        raise RuntimeError("bingo_settings are required to seed scores.")
 
-    day_start = settings.start_time
-    day_span = max(1, int((bingo_day_end(day_start, 1) - day_start).total_seconds()) - 1)
+    start = time_start if time_start is not None else settings.start_time
+    if start is None:
+        raise RuntimeError("bingo_settings.start_time is required to seed scores.")
+    if start.tzinfo is None:
+        start = start.replace(tzinfo=timezone.utc)
+
+    end = time_end if time_end is not None else datetime.now(timezone.utc)
+    if end.tzinfo is None:
+        end = end.replace(tzinfo=timezone.utc)
+    if end <= start:
+        raise RuntimeError("time_end must be after the seed window start.")
+
+    time_span = max(1, int((end - start).total_seconds()) - 1)
     with _connect(db_url) as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
             cur.execute("SELECT player_id, display_name, team FROM bingo_teams")
@@ -1316,8 +1329,8 @@ def seed_bingo_test_scores(
             rows = []
             for player in players:
                 for chart in charts:
-                    created_at = day_start + timedelta(
-                        seconds=random.randint(0, day_span)
+                    created_at = start + timedelta(
+                        seconds=random.randint(0, time_span)
                     )
                     rows.append(
                         (

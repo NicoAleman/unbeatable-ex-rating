@@ -2251,22 +2251,31 @@ def _render_bingo_teams(teams: dict[str, list[BingoTeamPlayer]]) -> None:
             "</div>"
         )
 
-    # Use components.html so Streamlit theme CSS cannot override centering.
-    components.html(
+    st.markdown(
         f"""
-        <div class="bingo-teams">{"".join(columns)}</div>
         <style>
-          html, body {{
-            margin: 0;
-            padding: 0;
-            width: 100%;
-            background: transparent !important;
+          .bingo-teams-shell {{
+            width: min(100%, 1100px);
+            margin: 0 auto;
+            display: flex;
+            justify-content: center;
+          }}
+          div[data-testid="stMarkdownContainer"]:has(.bingo-teams-shell),
+          div[data-testid="stElementContainer"]:has(.bingo-teams-shell) {{
+            margin-bottom: 0 !important;
+            padding-bottom: 0 !important;
+            overflow: visible !important;
+          }}
+          div[data-testid="stMarkdownContainer"]:has(.bingo-teams-shell) p {{
+            margin: 0 !important;
+            padding: 0 !important;
+            min-height: 0 !important;
           }}
           .bingo-teams {{
-            display: grid;
-            grid-template-columns: 1fr auto 1fr;
-            column-gap: 0;
-            align-items: stretch;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 1.75rem;
             width: 100%;
             margin: 0 auto;
             padding: 2.75rem 0 0.5rem 0;
@@ -2278,20 +2287,6 @@ def _render_bingo_teams(teams: dict[str, list[BingoTeamPlayer]]) -> None:
             width: max-content;
             max-width: 100%;
             text-align: center;
-          }}
-          .bingo-team-col-0 {{
-            justify-self: end;
-            padding-right: 3.25rem;
-          }}
-          .bingo-team-col-1 {{
-            justify-self: center;
-            padding: 0 3.25rem;
-            border-left: 1px solid rgba(234, 234, 234, 0.35);
-            border-right: 1px solid rgba(234, 234, 234, 0.35);
-          }}
-          .bingo-team-col-2 {{
-            justify-self: start;
-            padding-left: 3.25rem;
           }}
           .bingo-team-heading {{
             display: block;
@@ -2317,25 +2312,35 @@ def _render_bingo_teams(teams: dict[str, list[BingoTeamPlayer]]) -> None:
             text-align: center;
             white-space: nowrap;
           }}
-          @media (max-width: 700px) {{
+          @media (min-width: 900px) {{
             .bingo-teams {{
-              display: flex;
-              flex-direction: column;
-              align-items: center;
-              gap: 1.5rem;
+              display: grid;
+              grid-template-columns: 1fr auto 1fr;
+              column-gap: 0;
+              align-items: stretch;
+              gap: 0;
             }}
-            .bingo-team-col-0,
-            .bingo-team-col-1,
-            .bingo-team-col-2 {{
+            .bingo-team-col-0 {{
+              justify-self: end;
+              padding-right: 3.25rem;
+            }}
+            .bingo-team-col-1 {{
               justify-self: center;
-              padding: 0;
-              border: none;
+              padding: 0 3.25rem;
+              border-left: 1px solid rgba(234, 234, 234, 0.35);
+              border-right: 1px solid rgba(234, 234, 234, 0.35);
+            }}
+            .bingo-team-col-2 {{
+              justify-self: start;
+              padding-left: 3.25rem;
             }}
           }}
         </style>
+        <div class="bingo-teams-shell">
+          <div class="bingo-teams">{"".join(columns)}</div>
+        </div>
         """,
-        height=420,
-        width=None,
+        unsafe_allow_html=True,
     )
 
 
@@ -2621,8 +2626,8 @@ def _bingo_board_snapshot_label(
     if view_day is None:
         return "Live board"
     if view_day >= day_count:
-        return "Final board"
-    return f"End of Day {view_day}"
+        return "Final Scores"
+    return f"Scores at end of Day {view_day}"
 
 
 def _build_bingo_chart_modal_payload(
@@ -2737,10 +2742,12 @@ def _bingo_board_component_css(*, cols: int, rows: int) -> str:
     .bingo-board-root:not(.is-detailed) .bingo-cell-song {{
         font-size: 1.05rem;
         -webkit-line-clamp: unset;
+        transition: font-size 0.28s ease;
     }}
     .bingo-board-root:not(.is-detailed) .bingo-cell-diff {{
         font-size: 0.95rem;
         margin-top: 0.25rem;
+        transition: font-size 0.28s ease, margin-top 0.28s ease;
     }}
     .bingo-board-root:not(.is-detailed) .bingo-cell:hover {{
         z-index: 6;
@@ -2768,6 +2775,40 @@ def _bingo_board_component_css(*, cols: int, rows: int) -> str:
         font-size: 0.88rem;
         margin-top: 0.1rem;
     }}
+    .bingo-board-root.is-detailed .bingo-cell {{
+        grid-template-rows: minmax(3.5rem, auto) minmax(4.25rem, 1fr) minmax(2.15rem, auto);
+        transition: grid-template-rows 0.28s ease;
+    }}
+    .bingo-board-root.is-detailed .bingo-cell-mid,
+    .bingo-board-root.is-detailed .bingo-cell-bot {{
+        opacity: 1;
+        transform: translateY(0);
+        transition: opacity 0.22s ease, transform 0.22s ease;
+        transition-delay: 0.05s;
+    }}
+    .bingo-board-root.is-detailed .bingo-cell-top {{
+        min-height: 3.5rem;
+        height: auto;
+    }}
+    .bingo-board-root.is-detailed .bingo-cell-header {{
+        position: absolute;
+        left: 0;
+        right: 0;
+        width: 100%;
+        top: 0;
+        transform: translateY(0);
+        transition: top 0.28s ease, transform 0.28s ease;
+    }}
+    .bingo-board-root.is-detailed .bingo-cell-song {{
+        font-size: 0.95rem;
+        -webkit-line-clamp: 2;
+        transition: font-size 0.28s ease;
+    }}
+    .bingo-board-root.is-detailed .bingo-cell-diff {{
+        font-size: 0.88rem;
+        margin-top: 0.1rem;
+        transition: font-size 0.28s ease, margin-top 0.28s ease;
+    }}
     .bingo-cell {{
         --bingo-cell-bg: {BINGO_CELL_BG};
         position: relative;
@@ -2784,6 +2825,7 @@ def _bingo_board_component_css(*, cols: int, rows: int) -> str:
         box-sizing: border-box;
         border: none;
         overflow: hidden;
+        transition: grid-template-rows 0.28s ease;
     }}
     .bingo-cell-link {{
         cursor: pointer;
@@ -3091,7 +3133,7 @@ def _build_bingo_board_interactive_html(
               subtitleEl.textContent = "Scores as of " + formatAgo(updatedMs);
               return;
             }}
-            subtitleEl.textContent = "Scores as of " + snapshotLabel;
+            subtitleEl.textContent = snapshotLabel;
           }}
 
           function syncBoardModes() {{
