@@ -3375,12 +3375,11 @@ def _render_bingo_manual_submission(
         can_submit = (
             selected_player is not None
             and selected_chart is not None
-            and proof_file is not None
             and not score_invalid
             and not score_not_higher
             and not submission_in_progress
             and supabase_configured()
-            and supabase_storage_configured()
+            and (proof_file is None or supabase_storage_configured())
         )
         with btn_col:
             submitted = st.button(
@@ -3409,16 +3408,17 @@ def _render_bingo_manual_submission(
             and not submission_in_progress
             and selected_player is not None
             and selected_chart is not None
-            and proof_file is not None
         ):
-            st.session_state.bingo_pending_submission = {
+            pending: dict[str, object] = {
                 "player_id": selected_player.player_id,
                 "song": selected_chart.song,
                 "difficulty": selected_chart.difficulty,
                 "score": score_value,
-                "proof_bytes": proof_file.getvalue(),
-                "proof_filename": proof_file.name,
             }
+            if proof_file is not None:
+                pending["proof_bytes"] = proof_file.getvalue()
+                pending["proof_filename"] = proof_file.name
+            st.session_state.bingo_pending_submission = pending
             st.session_state.bingo_submission_in_progress = True
             # One app rerun: spinner covers save + board/scoreboard reload.
             st.rerun(scope="app")
@@ -5190,7 +5190,7 @@ def _commit_pending_bingo_submission() -> None:
         song=pending["song"],
         difficulty=pending["difficulty"],
         score=int(pending["score"]),
-        require_proof=True,
+        require_proof=False,
         proof_bytes=pending.get("proof_bytes"),
         proof_filename=pending.get("proof_filename"),
     )
