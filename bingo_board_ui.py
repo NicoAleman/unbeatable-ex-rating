@@ -110,6 +110,7 @@ def _cached_bingo_claim_feed(
 
 
 BINGO_APP_RERUN_KEY = "bingo_app_rerun_requested"
+BINGO_AUTO_REFRESH_STALE_SECONDS = 600
 
 
 def _request_bingo_app_rerun(*, touch_live: bool = True) -> None:
@@ -130,6 +131,17 @@ def _maybe_rerun_bingo_app() -> None:
 
 def _on_bingo_refresh() -> None:
     _request_bingo_app_rerun()
+
+
+def _consume_bingo_auto_refresh_query() -> None:
+    """After a JS-triggered full reload, bump the live clock and clear caches."""
+    if not st.query_params.get("bingo_auto"):
+        return
+    _touch_bingo_live_updated()
+    _cached_bingo_charts.clear()
+    _cached_bingo_teams.clear()
+    _cached_bingo_claim_feed.clear()
+    del st.query_params["bingo_auto"]
 
 
 def _touch_bingo_live_updated() -> None:
@@ -469,7 +481,12 @@ def _format_bingo_schedule(settings: BingoSettings) -> str | None:
     return f"{_label(start_local)} - {_label(end_local)}"
 
 
-def _render_bingo_countdown(settings: BingoSettings) -> None:
+def _render_bingo_countdown(
+    settings: BingoSettings,
+    *,
+    live_view: bool,
+    updated_ms: int | None = None,
+) -> None:
     if settings.start_time is None or settings.day_count is None:
         return
 
@@ -478,6 +495,9 @@ def _render_bingo_countdown(settings: BingoSettings) -> None:
         start_utc = start_utc.replace(tzinfo=timezone.utc)
     start_ms = int(start_utc.timestamp() * 1000)
     day_count = max(1, int(settings.day_count))
+    stale_ms = BINGO_AUTO_REFRESH_STALE_SECONDS * 1000
+    updated_ms_json = "null" if updated_ms is None else str(int(updated_ms))
+    live_view_json = "true" if live_view else "false"
 
     components.html(
         f"""
@@ -518,6 +538,9 @@ def _render_bingo_countdown(settings: BingoSettings) -> None:
           const startMs = {start_ms};
           const dayCount = {day_count};
           const dayMs = 24 * 60 * 60 * 1000;
+          const staleMs = {stale_ms};
+          const liveView = {live_view_json};
+          const updatedMs = {updated_ms_json};
           const labelEl = document.getElementById("bingo-countdown-label");
           const timerEl = document.getElementById("bingo-countdown-timer");
 
@@ -532,6 +555,67 @@ def _render_bingo_countdown(settings: BingoSettings) -> None:
             const minutes = Math.floor((totalSeconds % 3600) / 60);
             const seconds = totalSeconds % 60;
             return days + "d " + pad(hours) + "h " + pad(minutes) + "m " + pad(seconds) + "s";
+          }}
+
+          function triggerAutoRefresh(storageKey, reason) {{
+            try {{
+              if (sessionStorage.getItem(storageKey) === "1") {{
+                return;
+              }}
+              sessionStorage.setItem(storageKey, "1");
+            }} catch (error) {{}}
+            try {{
+              const url = new URL(window.parent.location.href);
+              url.searchParams.set("bingo_auto", reason);
+              window.parent.location.href = url.toString();
+            }} catch (error) {{
+              window.parent.location.reload();
+            }}
+          }}
+
+          function scheduleAutoRefresh() {{
+            if (!liveView) {{
+              return;
+            }}
+            const now = Date.now();
+            const gameEndMs = startMs + dayCount * dayMs;
+            const triggers = [];
+
+            if (now < startMs) {{
+              triggers.push({{
+                at: startMs,
+                storageKey: "bingo_refresh_start_" + startMs,
+                reason: "start",
+              }});
+            }} else if (now < gameEndMs) {{
+              const dayIndex = Math.floor((now - startMs) / dayMs) + 1;
+              const dayEndMs = startMs + dayIndex * dayMs;
+              triggers.push({{
+                at: dayEndMs,
+                storageKey: "bingo_refresh_day_" + dayIndex + "_" + dayEndMs,
+                reason: "day",
+              }});
+            }}
+
+            if (updatedMs !== null) {{
+              triggers.push({{
+                at: updatedMs + staleMs,
+                storageKey: "bingo_refresh_stale_" + updatedMs,
+                reason: "stale",
+              }});
+            }}
+
+            for (const trigger of triggers) {{
+              const delay = trigger.at - now;
+              if (delay <= 0) {{
+                triggerAutoRefresh(trigger.storageKey, trigger.reason);
+                return;
+              }}
+              setTimeout(
+                () => triggerAutoRefresh(trigger.storageKey, trigger.reason),
+                delay
+              );
+            }}
           }}
 
           function tick() {{
@@ -562,13 +646,19 @@ def _render_bingo_countdown(settings: BingoSettings) -> None:
 
           tick();
           setInterval(tick, 1000);
+          scheduleAutoRefresh();
         </script>
         """,
         height=86,
     )
 
 
-def _render_bingo_header(settings: BingoSettings) -> None:
+def _render_bingo_header(
+    settings: BingoSettings,
+    *,
+    live_view: bool,
+    updated_ms: int | None = None,
+) -> None:
     schedule = _format_bingo_schedule(settings)
     schedule_html = (
         f'<div class="bingo-header-schedule">{html.escape(schedule)}</div>'
@@ -607,7 +697,11 @@ def _render_bingo_header(settings: BingoSettings) -> None:
             """,
             unsafe_allow_html=True,
         )
-        _render_bingo_countdown(settings)
+        _render_bingo_countdown(
+            settings,
+            live_view=live_view,
+            updated_ms=updated_ms,
+        )
         st.markdown(
             '<span class="bingo-header-end-marker" style="display:none;"></span>',
             unsafe_allow_html=True,
@@ -3470,8 +3564,10 @@ def render_bingo_board() -> None:
         return
 
     _maybe_rerun_bingo_app()
+    _consume_bingo_auto_refresh_query()
 
-    if st.session_state.get("bingo_view_day") is None:
+    live_view = st.session_state.get("bingo_view_day") is None
+    if live_view and "bingo_last_updated" not in st.session_state:
         _touch_bingo_live_updated()
 
     saving = bool(st.session_state.get("bingo_submission_in_progress"))
@@ -3492,7 +3588,15 @@ def render_bingo_board() -> None:
             st.warning("Bingo settings are not available yet.")
             return
 
-        _render_bingo_header(settings)
+        _render_bingo_header(
+            settings,
+            live_view=live_view,
+            updated_ms=(
+                int(float(st.session_state.bingo_last_updated) * 1000)
+                if live_view
+                else None
+            ),
+        )
 
         if not charts:
             st.warning("No Bingo charts are configured yet.")
