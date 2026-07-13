@@ -109,12 +109,27 @@ def _cached_bingo_claim_feed(
     )
 
 
-def _on_bingo_refresh() -> None:
-    """Mark a manual refresh; scores always load live on each run."""
-    _touch_bingo_live_updated()
+BINGO_APP_RERUN_KEY = "bingo_app_rerun_requested"
+
+
+def _request_bingo_app_rerun(*, touch_live: bool = True) -> None:
+    """Queue a full-app rerun (must be consumed outside Streamlit callbacks)."""
+    if touch_live:
+        _touch_bingo_live_updated()
     _cached_bingo_charts.clear()
     _cached_bingo_teams.clear()
     _cached_bingo_claim_feed.clear()
+    st.session_state[BINGO_APP_RERUN_KEY] = True
+
+
+def _maybe_rerun_bingo_app() -> None:
+    if not st.session_state.pop(BINGO_APP_RERUN_KEY, False):
+        return
+    st.rerun(scope="app")
+
+
+def _on_bingo_refresh() -> None:
+    _request_bingo_app_rerun()
 
 
 def _touch_bingo_live_updated() -> None:
@@ -695,25 +710,33 @@ def _cell_border_css(
     col: int,
     group: int | None,
     groups_by_coord: dict[tuple[int, int], int | None],
+    *,
+    rows: int,
+    cols: int,
 ) -> str:
     """Colored group outline on outer edges; keep normal grid lines between same-group cells."""
+
+    def on_board(r: int, c: int) -> bool:
+        return 0 <= r < rows and 0 <= c < cols
+
+    def border_for_side(nr: int, nc: int) -> str:
+        if on_board(nr, nc) and groups_by_coord.get((nr, nc)) == group:
+            return DEFAULT_CELL_BORDER
+        color = GROUP_BORDER_COLORS.get(group)
+        if color is None:
+            return DEFAULT_CELL_BORDER
+        return f"{GROUP_BORDER_WIDTH} solid {color}"
+
     if group is None:
         return f"border:{DEFAULT_CELL_BORDER};"
 
-    color = GROUP_BORDER_COLORS.get(group)
-    if color is None:
+    if group not in GROUP_BORDER_COLORS:
         return f"border:{DEFAULT_CELL_BORDER};"
 
-    edge = f"{GROUP_BORDER_WIDTH} solid {color}"
-
-    def same_group(nr: int, nc: int) -> bool:
-        return groups_by_coord.get((nr, nc)) == group
-
-    # Same-group neighbors keep the default grid border (not the group color).
-    top = DEFAULT_CELL_BORDER if same_group(row - 1, col) else edge
-    right = DEFAULT_CELL_BORDER if same_group(row, col + 1) else edge
-    bottom = DEFAULT_CELL_BORDER if same_group(row + 1, col) else edge
-    left = DEFAULT_CELL_BORDER if same_group(row, col - 1) else edge
+    top = border_for_side(row - 1, col)
+    right = border_for_side(row, col + 1)
+    bottom = border_for_side(row + 1, col)
+    left = border_for_side(row, col - 1)
     return (
         f"border-top:{top};border-right:{right};"
         f"border-bottom:{bottom};border-left:{left};"
@@ -765,12 +788,21 @@ def _render_cell_html(
     groups_by_coord: dict[tuple[int, int], int | None],
     claim_team: str | None = None,
     bingo_segments: list[tuple[str, str, str]] | None = None,
+    rows: int,
+    cols: int,
 ) -> str:
     chart = standing.chart
     song = html.escape(chart.display_name)
     difficulty = html.escape(_difficulty_label(chart.difficulty, chart.level))
     cell_bg = _cell_background(standing)
-    border_css = _cell_border_css(chart.row, chart.column, chart.group, groups_by_coord)
+    border_css = _cell_border_css(
+        chart.row,
+        chart.column,
+        chart.group,
+        groups_by_coord,
+        rows=rows,
+        cols=cols,
+    )
     claim_html = _claim_outline_html(
         chart.row,
         chart.column,
@@ -1016,7 +1048,7 @@ def build_bingo_board_css() -> str:
     }}
     .bingo-board-wrap {{
         width: 100%;
-        overflow-x: hidden;
+        overflow: visible;
         padding-bottom: 2rem;
     }}
     .bingo-board {{
@@ -1024,6 +1056,7 @@ def build_bingo_board_css() -> str:
         gap: 0;
         width: 100%;
         margin: 0;
+        box-sizing: border-box;
         border: 1px solid rgba(234, 234, 234, 0.22);
         background: {BINGO_PAGE_BG};
         align-items: stretch;
@@ -1308,7 +1341,7 @@ def build_bingo_board_css() -> str:
             font-size: 0.74rem;
         }}
         .bingo-cell-leader-team {{
-            font-size: 0.9rem;
+        font-size: 0.9rem;
         }}
         .bingo-cell-leader-score {{
             font-size: 1rem;
@@ -1326,7 +1359,7 @@ def build_bingo_board_css() -> str:
             min-height: 3.1rem;
         }}
         [data-testid="stAppViewContainer"]:not(:has(.bingo-detailed-toggle:checked)) .bingo-cell:hover .bingo-cell-song {{
-            font-size: 0.8rem;
+        font-size: 0.8rem;
             -webkit-line-clamp: 2;
         }}
         [data-testid="stAppViewContainer"]:not(:has(.bingo-detailed-toggle:checked)) .bingo-cell:hover .bingo-cell-diff {{
@@ -1452,8 +1485,8 @@ def _render_bingo_scoreboard(
           .bingo-scoreboard-shell {{
             width: min(100%, 1100px);
             margin: 1.35rem auto 0.35rem;
-            display: flex;
-            justify-content: center;
+        display: flex;
+        justify-content: center;
           }}
           div[data-testid="stMarkdownContainer"]:has(.bingo-scoreboard-shell),
           div[data-testid="stElementContainer"]:has(.bingo-scoreboard-shell) {{
@@ -1559,7 +1592,7 @@ def _render_bingo_scoreboard(
             font-weight: 700 !important;
           }}
           .bingo-sb-blank {{
-            min-height: 1.4rem;
+        min-height: 1.4rem;
           }}
           .bingo-sb-total {{
             border-left: 1px solid rgba(234, 234, 234, 0.28);
@@ -1727,7 +1760,7 @@ def _render_bingo_activity_feed(*, settings: BingoSettings) -> None:
             );
           }}
           .bingo-activity-feed {{
-            display: flex;
+        display: flex;
             flex-direction: column;
             gap: var(--bingo-activity-item-gap);
             width: 100%;
@@ -1735,7 +1768,7 @@ def _render_bingo_activity_feed(*, settings: BingoSettings) -> None:
           .bingo-activity-item {{
             display: grid;
             grid-template-columns: minmax(5.5rem, 8.5rem) minmax(0, 1fr) auto;
-            align-items: center;
+        align-items: center;
             column-gap: 0.4rem;
             min-height: var(--bingo-activity-item-height);
             box-sizing: border-box;
@@ -1765,7 +1798,7 @@ def _render_bingo_activity_feed(*, settings: BingoSettings) -> None:
           }}
           .bingo-activity-chart {{
             color: rgba(245, 245, 245, 0.96);
-            font-weight: 700;
+        font-weight: 700;
           }}
           .bingo-activity-badges {{
             display: inline-flex;
@@ -1969,8 +2002,8 @@ def _render_bingo_manual_submission(
             font-size: 0.875rem;
             color: rgba(200, 205, 215, 0.75);
             margin: 0.15rem 0 0.65rem;
-          }
-        </style>
+    }
+    </style>
         """,
         unsafe_allow_html=True,
     )
@@ -2354,7 +2387,8 @@ def _on_bingo_return_live() -> None:
     """Match tapping Live on the day selector (runs before widgets instantiate)."""
     st.session_state.bingo_view_day = None
     st.session_state.bingo_board_view_control = "Live"
-    _touch_bingo_live_updated()
+    st.session_state.bingo_board_mode = "live"
+    _request_bingo_app_rerun()
 
 
 def _render_bingo_historical_banner(
@@ -2649,7 +2683,7 @@ def _bingo_board_component_css(*, cols: int, rows: int) -> str:
     }}
     .bingo-board-wrap {{
         width: 100%;
-        overflow-x: hidden;
+        overflow: visible;
     }}
     .bingo-board-shell {{
         width: 100%;
@@ -2661,6 +2695,7 @@ def _bingo_board_component_css(*, cols: int, rows: int) -> str:
         width: 100%;
         height: {board_height};
         margin: 0;
+        box-sizing: border-box;
         border: 1px solid rgba(234, 234, 234, 0.22);
         background: {BINGO_PAGE_BG};
         align-items: stretch;
@@ -3236,6 +3271,8 @@ def _render_bingo_board_fragment(
     completed_days: int,
 ) -> None:
     """Board body + day selector. Reruns alone when the day view changes."""
+    _maybe_rerun_bingo_app()
+
     day_count = max(1, int(settings.day_count or 1))
     # Track live vs historical across runs. Do not rely on bingo_view_day alone —
     # Back to Live clears it in on_click before this fragment runs.
@@ -3243,7 +3280,10 @@ def _render_bingo_board_fragment(
     view_day = _resolve_bingo_view_day(completed_days, day_count=day_count)
     mode = "historical" if view_day is not None else "live"
     if mode == "live" and prev_mode == "historical":
-        _touch_bingo_live_updated()
+        st.session_state.bingo_board_mode = "live"
+        _request_bingo_app_rerun()
+        _maybe_rerun_bingo_app()
+        return
     st.session_state.bingo_board_mode = mode
     show_live = completed_days < day_count
 
@@ -3319,6 +3359,8 @@ def _render_bingo_board_fragment(
                     groups_by_coord=groups_by_coord,
                     claim_team=claim_team,
                     bingo_segments=line_segments.get((row, col), []),
+                    rows=rows,
+                    cols=cols,
                 )
             )
 
@@ -3385,8 +3427,10 @@ def render_bingo_board() -> None:
         st.warning("Supabase is not configured, so the Bingo board cannot load.")
         return
 
-    if "bingo_last_updated" not in st.session_state:
-        st.session_state.bingo_last_updated = time.time()
+    _maybe_rerun_bingo_app()
+
+    if st.session_state.get("bingo_view_day") is None:
+        _touch_bingo_live_updated()
 
     saving = bool(st.session_state.get("bingo_submission_in_progress"))
     spinner = st.spinner("Saving score…") if saving else nullcontext()
