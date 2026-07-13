@@ -1,12 +1,13 @@
 import os
 
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, Header
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict
 
+from rating.bingo import process_bingo_mod_submission
 from rating.submission_api import authenticate_bearer_token, process_mod_submission
 
-app = FastAPI(title="UNBEATABLE EX Rating Submission API")
+app = FastAPI(title="UNBEATABLE Submission API")
 
 
 class SubmitRequest(BaseModel):
@@ -16,6 +17,23 @@ class SubmitRequest(BaseModel):
     ex_rating: float | None = None
     last_updated: str | None = None
     scores: list[dict]
+
+
+class BingoSubmitRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    player_id: str
+    song: str
+    difficulty: str
+    score: int
+    accuracy: float | None = None
+    critical: int | None = None
+    perfect: int | None = None
+    great: int | None = None
+    good: int | None = None
+    okay: int | None = None
+    barely: int | None = None
+    miss: int | None = None
 
 
 def _expected_api_key() -> str | None:
@@ -56,4 +74,24 @@ def submit(
         "success": True,
         "message": result.message or "Rating update saved to the leaderboard.",
         "new_rank": result.new_rank,
+    }
+
+
+@app.post("/submit/bingo")
+def submit_bingo(
+    body: BingoSubmitRequest,
+    authorization: str | None = Header(default=None),
+):
+    auth_error = _require_auth(authorization)
+    if auth_error is not None:
+        return auth_error
+
+    success, message = process_bingo_mod_submission(body.model_dump())
+    if not success:
+        status_code = 500 if message.startswith("Could not save score:") else 400
+        return _error_response(status_code, message)
+
+    return {
+        "success": True,
+        "message": message,
     }

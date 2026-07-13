@@ -730,13 +730,27 @@ def submit_bingo_score(
     song: str,
     difficulty: str,
     score: int,
+    source: str | None = None,
+    require_live: bool = False,
+    accuracy: float | None = None,
+    critical: int | None = None,
+    perfect: int | None = None,
+    great: int | None = None,
+    good: int | None = None,
+    okay: int | None = None,
+    barely: int | None = None,
+    miss: int | None = None,
     db_url: str | None = None,
 ) -> tuple[bool, str]:
-    """Insert a manual bingo score if it beats the player's current best.
+    """Insert a bingo score if it beats the player's current best since event start.
 
     Returns (success, message).
     """
-    from rating.constants import SCORE_SOURCE_SUBMISSION
+    from rating.constants import SCORE_SOURCE_IN_GAME, SCORE_SOURCE_SUBMISSION
+
+    score_source = source or SCORE_SOURCE_SUBMISSION
+    if score_source not in {SCORE_SOURCE_SUBMISSION, SCORE_SOURCE_IN_GAME}:
+        return False, "Invalid score source."
 
     try:
         score_value = int(score)
@@ -757,6 +771,18 @@ def submit_bingo_score(
         return False, "Bingo settings are not available."
     if settings.start_time is None:
         return False, "Bingo has not started yet."
+
+    if require_live:
+        if settings.day_count is None:
+            return False, "Bingo competition is not configured."
+        if (
+            bingo_in_progress_day(
+                start_time=settings.start_time,
+                day_count=settings.day_count,
+            )
+            is None
+        ):
+            return False, "Bingo competition is not live."
 
     charts = bingo_charts_on_board(load_bingo_charts(db_url), settings.board_width)
     chart = next(
@@ -813,8 +839,9 @@ def submit_bingo_score(
                     """
                     INSERT INTO bingo_scores (
                         player_id, display_name, team, song, difficulty,
-                        score, source
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+                        score, accuracy, critical, perfect, great, good, okay,
+                        barely, miss, source
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         player["player_id"],
@@ -823,7 +850,15 @@ def submit_bingo_score(
                         song,
                         difficulty,
                         score_value,
-                        SCORE_SOURCE_SUBMISSION,
+                        accuracy,
+                        critical,
+                        perfect,
+                        great,
+                        good,
+                        okay,
+                        barely,
+                        miss,
+                        score_source,
                     ),
                 )
             conn.commit()
@@ -836,6 +871,68 @@ def submit_bingo_score(
         True,
         f"Saved {format_leader_score(score_value)} for {player['display_name']} "
         f"on {chart.display_name}.",
+    )
+
+
+def _optional_int(value: object, field: str) -> tuple[int | None, str | None]:
+    if value is None:
+        return None, None
+    try:
+        return int(value), None
+    except (TypeError, ValueError):
+        return None, f"{field} must be a whole number."
+
+
+def _optional_float(value: object, field: str) -> tuple[float | None, str | None]:
+    if value is None:
+        return None, None
+    try:
+        return float(value), None
+    except (TypeError, ValueError):
+        return None, f"{field} must be a number."
+
+
+def process_bingo_mod_submission(payload: dict[str, object]) -> tuple[bool, str]:
+    """Validate and persist one Bingo chart score from the game mod API."""
+    from rating.constants import SCORE_SOURCE_IN_GAME
+
+    player_id = str(payload.get("player_id", "")).strip()
+    if not player_id:
+        return False, "player_id is required."
+
+    song = str(payload.get("song", "")).strip()
+    difficulty = str(payload.get("difficulty", "")).strip()
+    if not song or not difficulty:
+        return False, "song and difficulty are required."
+
+    if "score" not in payload or payload["score"] is None:
+        return False, "score is required."
+
+    try:
+        score_value = int(payload["score"])
+    except (TypeError, ValueError):
+        return False, "Score must be a whole number."
+
+    accuracy, accuracy_error = _optional_float(payload.get("accuracy"), "accuracy")
+    if accuracy_error:
+        return False, accuracy_error
+
+    judgement_fields: dict[str, int | None] = {}
+    for field in ("critical", "perfect", "great", "good", "okay", "barely", "miss"):
+        value, error = _optional_int(payload.get(field), field)
+        if error:
+            return False, error
+        judgement_fields[field] = value
+
+    return submit_bingo_score(
+        player_id=player_id,
+        song=song,
+        difficulty=difficulty,
+        score=score_value,
+        source=SCORE_SOURCE_IN_GAME,
+        require_live=True,
+        accuracy=accuracy,
+        **judgement_fields,
     )
 
 

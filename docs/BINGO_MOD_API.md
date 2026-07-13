@@ -11,9 +11,9 @@ For shared auth, deploy, and error format, see [`SUBMISSION_BACKEND.md`](SUBMISS
 | Piece | Status |
 |---|---|
 | `POST /submit` (EX Rating) | Live |
-| `POST /submit/bingo` (Bingo) | **Planned** — route not deployed yet |
-| Validation logic | Implemented in `rating/bingo.py` → `submit_bingo_score()` |
-| Live-window check | **Planned** — must be added before mod launch |
+| `POST /submit/bingo` (Bingo) | Implemented in `api/main.py` — deploy to Render |
+| Validation logic | `rating/bingo.py` → `submit_bingo_score()`, `process_bingo_mod_submission()` |
+| Live-window check | Enforced for mod submissions (`require_live=True`) |
 
 **Live API base URL (same service as EX):** `https://ex-rating-submit-api.onrender.com`
 
@@ -269,12 +269,8 @@ Only submit when the score is a new personal best for that chart — the server 
 
 Before the mod ships:
 
-- [ ] Add `POST /submit/bingo` to `api/main.py`
-- [ ] Add `process_bingo_mod_submission()` wrapper (or extend `submit_bingo_score()`) with:
-  - [ ] Bearer auth
-  - [ ] Live-window check via `bingo_in_progress_day()`
-  - [ ] `source = 'in_game'`
-  - [ ] Optional judgement column persistence
+- [x] Add `POST /submit/bingo` to `api/main.py`
+- [x] Add `process_bingo_mod_submission()` with live-window check, `source = 'in_game'`, judgement columns
 - [ ] Redeploy Render service (`render.yaml`)
 - [ ] Add mod repo doc mirroring this file under `Unbeatable-Mods/mods/Bingo/resources/`
 

@@ -8,8 +8,9 @@ Implementation guide for the write API used by the [EXRating game mod](https://g
 
 | Path | Purpose |
 |---|---|
-| `api/main.py` | FastAPI app: `GET /health`, `POST /submit` |
-| `rating/submission_api.py` | Validation, server-side rating recompute, DB transaction |
+| `api/main.py` | FastAPI app: `GET /health`, `POST /submit`, `POST /submit/bingo` |
+| `rating/submission_api.py` | EX Rating validation, server-side rating recompute, DB transaction |
+| `rating/bingo.py` | Bingo score validation and `process_bingo_mod_submission()` |
 | `render.yaml` | One-click Render deploy config |
 
 The API reuses the same rating logic and Postgres writes as the Streamlit site.
