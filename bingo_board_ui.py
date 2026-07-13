@@ -46,6 +46,7 @@ from rating.bingo import (
     load_bingo_teams_by_ex_rating,
     submit_bingo_score,
 )
+from rating.calculator import ex_accuracy_percent
 from rating.bingo_proof_storage import create_bingo_proof_signed_url
 from rating.constants import SCORE_SOURCE_IN_GAME, SCORE_SOURCE_SUBMISSION
 from rating.formatting import format_difficulty_display_name
@@ -320,7 +321,285 @@ def _inject_bingo_board_layout_css(board_width: str) -> None:
     )
 
 
-def _render_bingo_board_toolbar(*, show_refresh: bool = True) -> None:
+def _player_chart_score(
+    chart: BingoChart,
+    *,
+    player_id: str,
+    leaderboard_by_chart: dict[tuple[str, str], list[BingoChartLeaderboardEntry]],
+) -> int:
+    entries = leaderboard_by_chart.get((chart.song, chart.difficulty), [])
+    for entry in entries:
+        if entry.player_id == player_id:
+            return int(entry.score)
+    return 0
+
+
+def _format_player_max_score_label(chart: BingoChart, score: int) -> str:
+    max_score = bingo_chart_max_score(chart.song, chart.difficulty)
+    if max_score is None or max_score <= 0:
+        return "— Max Score"
+    pct = ex_accuracy_percent(score, max_score)
+    return f"{pct:.2f}% Max Score"
+
+
+def _player_block_html(*, team: str, score: int) -> str:
+    color = TEAM_TEXT_COLORS.get(team, "#eaeaea")
+    score_text = html.escape(format_leader_score(score))
+    return (
+        '<div class="bingo-cell-leader">'
+        f'<div class="bingo-cell-leader-team" style="color:{color};">Personal Best</div>'
+        f'<div class="bingo-cell-leader-score bingo-cell-player-score">{score_text}</div>'
+        "</div>"
+    )
+
+
+def _player_footer_html(label: str) -> str:
+    return (
+        f'<div class="bingo-cell-player-footer">{html.escape(label)}</div>'
+    )
+
+
+def _render_bingo_player_view_controls(
+    teams: dict[str, list[BingoTeamPlayer]],
+) -> BingoTeamPlayer | None:
+    """Search/select a player to enable the Player Board view."""
+    players = _flatten_bingo_players(teams)
+    st.markdown(
+        """
+        <style>
+        .st-key-bingo_player_view_shell {
+            width: min(100%, 1100px);
+            max-width: 28rem;
+            margin: 0 auto 0.55rem;
+        }
+        .st-key-bingo_player_view_shell [data-testid="stHorizontalBlock"] {
+            align-items: end !important;
+            gap: 0.55rem !important;
+        }
+        .st-key-bingo_player_view_shell [data-testid="stElementContainer"] {
+            margin: 0 !important;
+            padding: 0 !important;
+        }
+        .st-key-bingo_player_view_shell [data-testid="stTextInput"] input {
+            font-size: 0.95rem !important;
+        }
+        .st-key-bingo_player_view_shell [data-testid="stSelectbox"] div[data-baseweb="select"] {
+            font-size: 0.95rem !important;
+        }
+        .st-key-bingo_player_view_shell label[data-testid="stWidgetLabel"] {
+            font-size: 0.95rem !important;
+            margin-bottom: 0.2rem !important;
+        }
+        .bingo-player-view-marker { display: none; }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+    with st.container(key="bingo_player_view_shell"):
+        st.markdown(
+            '<span class="bingo-player-view-marker"></span>',
+            unsafe_allow_html=True,
+        )
+        search_col, select_col = st.columns([1, 1.15], gap="small")
+        with search_col:
+            player_search = st.text_input(
+                "Search",
+                placeholder="Search player…",
+                key="bingo-board-player-search",
+            ).strip()
+        player_needle = player_search.casefold()
+        if player_needle:
+            player_matches = [
+                player
+                for player in players
+                if player_needle in player.display_name.casefold()
+            ]
+        else:
+            player_matches = list(players)
+        player_matches = sorted(
+            player_matches,
+            key=lambda player: player.display_name.casefold(),
+        )
+        if player_needle:
+            player_matches = player_matches[:BINGO_SEARCH_LIMIT]
+        player_options = [BINGO_PLAYER_SELECT_PLACEHOLDER] + [
+            _bingo_player_option_label(player) for player in player_matches
+        ]
+        with select_col:
+            if player_needle:
+                _auto_select_if_single_match(
+                    select_key="bingo-board-player-select",
+                    placeholder=BINGO_PLAYER_SELECT_PLACEHOLDER,
+                    matches=[
+                        _bingo_player_option_label(player) for player in player_matches
+                    ],
+                )
+            selected_option = st.selectbox(
+                "Player",
+                options=player_options,
+                key="bingo-board-player-select",
+                disabled=not player_matches,
+            )
+        selected_player = _find_bingo_player(
+            players,
+            option_label=selected_option,
+        )
+        previous_player_id = st.session_state.get("bingo_view_player_id")
+        if selected_player is None:
+            st.session_state.pop("bingo_view_player_id", None)
+            st.session_state.pop("bingo_auto_enable_player_board", None)
+        else:
+            if previous_player_id != selected_player.player_id:
+                st.session_state["bingo_auto_enable_player_board"] = True
+            st.session_state["bingo_view_player_id"] = selected_player.player_id
+        return selected_player
+
+
+_BINGO_BOARD_TOGGLE_JS = """
+(function () {
+  const parentWin = window.parent;
+  const doc = parentWin.document;
+  const KEYS = {
+    hideColors: "bingo_hide_colors",
+    hideLines: "bingo_hide_lines",
+    detailed: "bingo_detailed_board",
+    playerBoard: "bingo_player_board",
+  };
+
+  function toggles() {
+    return {
+      hideColors: doc.querySelector(".bingo-colors-toggle"),
+      hideLines: doc.querySelector(".bingo-lines-toggle"),
+      detailed: doc.querySelector(".bingo-detailed-toggle"),
+      playerBoard: doc.querySelector(".bingo-player-board-toggle"),
+      container: doc.querySelector(".bingo-board-controls-toolbar"),
+    };
+  }
+
+  function saveState() {
+    const { hideColors, hideLines, detailed, playerBoard } = toggles();
+    if (hideColors) {
+      sessionStorage.setItem(KEYS.hideColors, hideColors.checked ? "1" : "0");
+    }
+    if (hideLines) {
+      sessionStorage.setItem(KEYS.hideLines, hideLines.checked ? "1" : "0");
+    }
+    if (detailed) {
+      sessionStorage.setItem(KEYS.detailed, detailed.checked ? "1" : "0");
+    }
+    if (playerBoard && !playerBoard.disabled) {
+      sessionStorage.setItem(KEYS.playerBoard, playerBoard.checked ? "1" : "0");
+    }
+  }
+
+  function enforceExclusive() {
+    const { detailed, playerBoard } = toggles();
+    if (!detailed || !playerBoard || playerBoard.disabled) {
+      return;
+    }
+    if (detailed.checked && playerBoard.checked) {
+      playerBoard.checked = false;
+    }
+  }
+
+  function restoreState(container) {
+    const { hideColors, hideLines, detailed, playerBoard } = toggles();
+    if (!hideColors || !hideLines || !detailed || !playerBoard) {
+      return;
+    }
+    if (sessionStorage.getItem(KEYS.hideColors) !== null) {
+      hideColors.checked = sessionStorage.getItem(KEYS.hideColors) === "1";
+    }
+    if (sessionStorage.getItem(KEYS.hideLines) !== null) {
+      hideLines.checked = sessionStorage.getItem(KEYS.hideLines) === "1";
+    }
+    if (sessionStorage.getItem(KEYS.detailed) !== null) {
+      detailed.checked = sessionStorage.getItem(KEYS.detailed) === "1";
+    }
+    if (!playerBoard.disabled && sessionStorage.getItem(KEYS.playerBoard) !== null) {
+      playerBoard.checked = sessionStorage.getItem(KEYS.playerBoard) === "1";
+    }
+    if (playerBoard.disabled) {
+      playerBoard.checked = false;
+      sessionStorage.setItem(KEYS.playerBoard, "0");
+    }
+    if (container && container.dataset.autoPlayerBoard === "1") {
+      if (!playerBoard.disabled) {
+        playerBoard.checked = true;
+        detailed.checked = false;
+      }
+      container.dataset.autoPlayerBoard = "0";
+    }
+    enforceExclusive();
+    saveState();
+  }
+
+  function onToggleChange(event) {
+    const target = event.target;
+    const { detailed, playerBoard } = toggles();
+    if (target.matches(".bingo-detailed-toggle")) {
+      if (target.checked && playerBoard && !playerBoard.disabled) {
+        playerBoard.checked = false;
+      }
+    } else if (target.matches(".bingo-player-board-toggle")) {
+      if (target.checked && detailed) {
+        detailed.checked = false;
+      }
+    }
+    enforceExclusive();
+    saveState();
+  }
+
+  function boot() {
+    const { container } = toggles();
+    if (!container || container.dataset.togglesReady === "1") {
+      return;
+    }
+    container.dataset.togglesReady = "1";
+    restoreState(container);
+  }
+
+  if (!parentWin.__bingoBoardToggleListeners) {
+    parentWin.__bingoBoardToggleListeners = true;
+    doc.addEventListener("change", onToggleChange, true);
+  }
+  if (!parentWin.__bingoBoardToggleBooted) {
+    parentWin.__bingoBoardToggleBooted = true;
+    boot();
+    setInterval(boot, 400);
+    setInterval(() => {
+      enforceExclusive();
+      saveState();
+    }, 250);
+  } else {
+    boot();
+  }
+})();
+"""
+
+
+def _render_bingo_board_toggle_script(*, embed_in_last_updated: bool = False) -> str:
+    """Return toggle boot JS; optionally as a second script block for iframe embedding."""
+    if embed_in_last_updated:
+        return f"<script>{_BINGO_BOARD_TOGGLE_JS}</script>"
+    return _BINGO_BOARD_TOGGLE_JS
+
+
+def _mount_bingo_board_toggle_script() -> None:
+    """Zero-height iframe in the toolbar row (never below it — that adds vertical gap)."""
+    components.html(
+        f"<script>{_BINGO_BOARD_TOGGLE_JS}</script>",
+        height=0,
+        scrolling=False,
+    )
+
+
+def _render_bingo_board_toolbar(
+    *,
+    show_refresh: bool = True,
+    player_board_enabled: bool = False,
+    auto_enable_player_board: bool = False,
+) -> None:
     if show_refresh:
         if "bingo_last_updated" not in st.session_state:
             _touch_bingo_live_updated()
@@ -423,18 +702,68 @@ def _render_bingo_board_toolbar(*, show_refresh: bool = True) -> None:
             max-width: 360px !important;
             height: 1.7rem !important;
         }
+        .st-key-bingo_refresh_row .st-key-bingo_toggle_boot,
+        .st-key-bingo-refresh-row .st-key-bingo_toggle_boot,
+        .st-key-bingo_refresh_row .st-key-bingo-toggle-boot,
+        .st-key-bingo-refresh-row .st-key-bingo-toggle-boot {
+            width: 0 !important;
+            min-width: 0 !important;
+            max-width: 0 !important;
+            height: 0 !important;
+            min-height: 0 !important;
+            max-height: 0 !important;
+            margin: 0 !important;
+            padding: 0 !important;
+            overflow: hidden !important;
+            flex: 0 0 0 !important;
+        }
+        .st-key-bingo_refresh_row .st-key-bingo_toggle_boot iframe,
+        .st-key-bingo-refresh-row .st-key-bingo_toggle_boot iframe,
+        .st-key-bingo_refresh_row .st-key-bingo-toggle-boot iframe,
+        .st-key-bingo-refresh-row .st-key-bingo-toggle-boot iframe {
+            width: 0 !important;
+            height: 0 !important;
+            min-height: 0 !important;
+            max-height: 0 !important;
+            margin: 0 !important;
+            padding: 0 !important;
+            border: none !important;
+            display: block !important;
+        }
         .bingo-board-controls-toolbar {
             padding-bottom: 0.8rem !important;
             margin: 0 !important;
             width: auto !important;
             min-height: 1.7rem;
+            flex-wrap: nowrap !important;
+            gap: 1.15rem !important;
+        }
+        .bingo-board-controls-toolbar .bingo-board-toggle-label {
+            white-space: nowrap;
+            flex-shrink: 0;
+            font-size: 1.05rem;
+            gap: 0.45rem;
+        }
+        .bingo-board-controls-toolbar .bingo-board-toggle-label span {
+            white-space: nowrap;
+        }
+        .bingo-board-toggle-label.is-disabled {
+            opacity: 0.42;
+            cursor: not-allowed;
+        }
+        .bingo-board-toggle-label.is-disabled span {
+            color: rgba(234, 234, 234, 0.45);
+        }
+        .bingo-board-toggle:disabled {
+            cursor: not-allowed;
+            opacity: 0.55;
         }
         .bingo-toolbar-marker { display: none; }
         </style>
         """,
         unsafe_allow_html=True,
     )
-    left, right = st.columns([1, 1], gap="small")
+    left, right = st.columns([0.85, 1.15], gap="small")
     with left:
         st.markdown(
             '<span class="bingo-toolbar-marker"></span>',
@@ -499,14 +828,30 @@ def _render_bingo_board_toolbar(*, show_refresh: bool = True) -> None:
                           tick();
                           setInterval(tick, 1000);
                         </script>
+                        {_render_bingo_board_toggle_script(embed_in_last_updated=True)}
                         """,
                         height=28,
                         width=360,
                     )
+            else:
+                with st.container(key="bingo_toggle_boot"):
+                    _mount_bingo_board_toggle_script()
+    player_board_disabled = "" if player_board_enabled else " disabled"
+    player_board_label_class = (
+        "bingo-board-toggle-label"
+        if player_board_enabled
+        else "bingo-board-toggle-label is-disabled"
+    )
+    auto_player_board_attr = "1" if auto_enable_player_board else "0"
     with right:
         st.markdown(
-            """
-            <div class="bingo-board-controls bingo-board-controls-toolbar">
+            f"""
+            <div class="bingo-board-controls bingo-board-controls-toolbar"
+              data-auto-player-board="{auto_player_board_attr}">
+              <label class="bingo-board-toggle-label">
+                <input type="checkbox" class="bingo-board-toggle bingo-colors-toggle" />
+                <span>Hide Colors</span>
+              </label>
               <label class="bingo-board-toggle-label">
                 <input type="checkbox" class="bingo-board-toggle bingo-lines-toggle" />
                 <span>Hide Bingo Lines</span>
@@ -514,6 +859,12 @@ def _render_bingo_board_toolbar(*, show_refresh: bool = True) -> None:
               <label class="bingo-board-toggle-label">
                 <input type="checkbox" class="bingo-board-toggle bingo-detailed-toggle" />
                 <span>Detailed Board</span>
+              </label>
+              <label class="{player_board_label_class}">
+                <input type="checkbox"
+                  class="bingo-board-toggle bingo-player-board-toggle"
+                  {player_board_disabled} />
+                <span>Player Board</span>
               </label>
             </div>
             """,
@@ -1055,6 +1406,9 @@ def _render_cell_html(
     bingo_segments: list[tuple[str, str, str]] | None = None,
     rows: int,
     cols: int,
+    view_player: BingoTeamPlayer | None = None,
+    player_score: int | None = None,
+    player_max_score_label: str | None = None,
 ) -> str:
     chart = standing.chart
     song = html.escape(chart.display_name)
@@ -1077,6 +1431,24 @@ def _render_cell_html(
     )
     line_html = _bingo_line_svg_html(bingo_segments or [])
     aria_label = html.escape(f"View leaderboard for {chart.display_name}")
+    if view_player is not None:
+        body_html = (
+            '<div class="bingo-cell-body">'
+            '<div class="bingo-cell-view bingo-cell-team-view">'
+            f'<div class="bingo-cell-mid">{_leader_block_html(standing)}</div>'
+            f'<div class="bingo-cell-bot">{_trailers_block_html(standing)}</div>'
+            "</div>"
+            '<div class="bingo-cell-view bingo-cell-player-view">'
+            f'<div class="bingo-cell-mid">{_player_block_html(team=view_player.team, score=int(player_score or 0))}</div>'
+            f'<div class="bingo-cell-bot">{_player_footer_html(player_max_score_label or "— Max Score")}</div>'
+            "</div>"
+            "</div>"
+        )
+    else:
+        body_html = (
+            f'<div class="bingo-cell-mid">{_leader_block_html(standing)}</div>'
+            f'<div class="bingo-cell-bot">{_trailers_block_html(standing)}</div>'
+        )
     return (
         f'<div class="bingo-cell bingo-cell-link" role="button" tabindex="0"'
         f' data-row="{chart.row}" data-col="{chart.column}"'
@@ -1090,8 +1462,7 @@ def _render_cell_html(
         f'<div class="bingo-cell-diff">{difficulty}</div>'
         "</div>"
         "</div>"
-        f'<div class="bingo-cell-mid">{_leader_block_html(standing)}</div>'
-        f'<div class="bingo-cell-bot">{_trailers_block_html(standing)}</div>'
+        f"{body_html}"
         "</div>"
     )
 
@@ -1211,7 +1582,8 @@ def build_bingo_board_css() -> str:
         flex-direction: row;
         justify-content: flex-end;
         align-items: center;
-        gap: 2rem;
+        flex-wrap: nowrap;
+        gap: 1.15rem;
         margin: 0;
         padding: 0;
     }}
@@ -1220,18 +1592,25 @@ def build_bingo_board_css() -> str:
         margin: 0 !important;
         width: auto !important;
         min-height: 1.7rem;
+        flex-wrap: nowrap !important;
+        gap: 1.15rem !important;
     }}
     .bingo-board-toggle-label {{
         display: inline-flex;
         align-items: center;
-        gap: 0.6rem;
+        gap: 0.45rem;
         cursor: pointer;
         user-select: none;
-        font-size: 1.28rem;
+        font-size: 1.05rem;
         font-weight: 700;
         color: rgba(234, 234, 234, 0.95);
         font-family: "Source Sans Pro", "Segoe UI", sans-serif;
         line-height: 1.15;
+        white-space: nowrap;
+        flex-shrink: 0;
+    }}
+    .bingo-board-toggle-label span {{
+        white-space: nowrap;
     }}
     .bingo-board-toggle {{
         width: 1.4rem;
@@ -1466,6 +1845,9 @@ def build_bingo_board_css() -> str:
         color: transparent;
         font-size: 0;
         user-select: none;
+    }}
+    .bingo-chart-modal-table tbody tr.bingo-chart-modal-row--highlighted td {{
+        background: rgba(255, 255, 255, 0.085);
     }}
     .bingo-chart-modal-proof-badge,
     .bingo-chart-modal-proof-btn {{
@@ -1819,6 +2201,36 @@ def _inject_scoreboard_day_highlight(
     )
 
 
+_SCOREBOARD_PLAYER_ROW_BG = {
+    "Eve": "#152842",
+    "Grace": "#2a1a22",
+    "Rest": "#152a20",
+}
+
+
+def _inject_scoreboard_player_row_highlight(highlight_team: str | None) -> None:
+    """Highlight the selected player's team row on the daily scoreboard."""
+    if highlight_team is None or highlight_team not in _SCOREBOARD_PLAYER_ROW_BG:
+        rule = ""
+    else:
+        team = html.escape(highlight_team)
+        row_bg = _SCOREBOARD_PLAYER_ROW_BG[highlight_team]
+        rule = f"""
+        .bingo-scoreboard tbody tr[data-team="{team}"] th,
+        .bingo-scoreboard tbody tr[data-team="{team}"] td {{
+          background-color: {row_bg} !important;
+        }}
+        """
+    st.markdown(
+        f"""
+        <style>
+        {rule}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def _bingo_scoreboard_multiplier_label(day: int, *, day_count: int) -> str:
     multiplier = bingo_day_multiplier(day, day_count)
     if multiplier <= 1:
@@ -1941,7 +2353,7 @@ def _render_bingo_scoreboard(
         if totals_are_prospective:
             total_class += " bingo-sb-prospective"
         rows_html.append(
-            "<tr>"
+            f'<tr data-team="{html.escape(team)}">'
             f'<th class="bingo-sb-team" scope="row" style="color:{color};background:{row_bg};">'
             f"{html.escape(team.upper())}</th>"
             f'{"".join(cells)}'
@@ -2668,6 +3080,19 @@ def _find_bingo_player(
 ) -> BingoTeamPlayer | None:
     for player in players:
         if _bingo_player_option_label(player) == option_label:
+            return player
+    return None
+
+
+def _resolve_bingo_view_player(
+    teams: dict[str, list[BingoTeamPlayer]] | None = None,
+) -> BingoTeamPlayer | None:
+    player_id = st.session_state.get("bingo_view_player_id")
+    if not player_id:
+        return None
+    roster = teams if teams is not None else _cached_bingo_teams()
+    for player in _flatten_bingo_players(roster):
+        if player.player_id == player_id:
             return player
     return None
 
@@ -3514,6 +3939,7 @@ def _build_bingo_chart_modal_payload(
     entries_by_chart: dict[tuple[str, str], list[BingoChartLeaderboardEntry]],
     *,
     roster: dict[str, list[BingoTeamPlayer]],
+    highlight_player_id: str | None = None,
 ) -> dict[str, dict[str, str]]:
     payload: dict[str, dict[str, str]] = {}
     for chart in charts:
@@ -3526,7 +3952,10 @@ def _build_bingo_chart_modal_payload(
                 f'{html.escape(chart.display_name)} '
                 f'<span class="bingo-chart-modal-diff">{difficulty}</span>'
             ),
-            "table_html": _render_bingo_chart_leaderboard_table_html(entries),
+            "table_html": _render_bingo_chart_leaderboard_table_html(
+                entries,
+                highlight_player_id=highlight_player_id,
+            ),
         }
     return payload
 
@@ -3589,27 +4018,29 @@ def _bingo_board_component_css(*, cols: int, rows: int) -> str:
     .bingo-board-root.hide-lines .bingo-line-svg {{
         display: none !important;
     }}
-    .bingo-board-root:not(.is-detailed) .bingo-cell-mid,
-    .bingo-board-root:not(.is-detailed) .bingo-cell-bot {{
+    .bingo-board-root.hide-colors .bingo-line-svg {{
+        display: none !important;
+    }}
+    .bingo-board-root:not(.is-detailed):not(.is-player-board) .bingo-cell-mid,
+    .bingo-board-root:not(.is-detailed):not(.is-player-board) .bingo-cell-bot {{
         overflow: hidden;
         min-height: 0;
         opacity: 0;
         transform: translateY(-0.35rem);
         transition: opacity 0.22s ease, transform 0.22s ease;
     }}
-    .bingo-board-root:not(.is-detailed) .bingo-cell {{
+    .bingo-board-root:not(.is-detailed):not(.is-player-board) .bingo-cell {{
         cursor: pointer;
         grid-template-rows: 1fr 0fr 0fr;
         place-items: stretch;
-        transition: grid-template-rows 0.28s ease;
     }}
-    .bingo-board-root:not(.is-detailed) .bingo-cell-top {{
+    .bingo-board-root:not(.is-detailed):not(.is-player-board) .bingo-cell-top {{
         position: relative;
         min-height: 0;
         height: 100%;
         width: 100%;
     }}
-    .bingo-board-root:not(.is-detailed) .bingo-cell-header {{
+    .bingo-board-root:not(.is-detailed):not(.is-player-board) .bingo-cell-header {{
         position: absolute;
         left: 0;
         right: 0;
@@ -3618,45 +4049,44 @@ def _bingo_board_component_css(*, cols: int, rows: int) -> str:
         transform: translateY(-50%);
         transition: top 0.28s ease, transform 0.28s ease;
     }}
-    .bingo-board-root:not(.is-detailed) .bingo-cell-song {{
+    .bingo-board-root:not(.is-detailed):not(.is-player-board) .bingo-cell-song {{
         font-size: 1.05rem;
         -webkit-line-clamp: unset;
         transition: font-size 0.28s ease;
     }}
-    .bingo-board-root:not(.is-detailed) .bingo-cell-diff {{
+    .bingo-board-root:not(.is-detailed):not(.is-player-board) .bingo-cell-diff {{
         font-size: 0.95rem;
         margin-top: 0.25rem;
         transition: font-size 0.28s ease, margin-top 0.28s ease;
     }}
-    .bingo-board-root:not(.is-detailed) .bingo-cell:hover {{
+    .bingo-board-root:not(.is-detailed):not(.is-player-board) .bingo-cell:hover {{
         z-index: 6;
         grid-template-rows: minmax(3.5rem, auto) minmax(4.25rem, 1fr) minmax(2.15rem, auto);
     }}
-    .bingo-board-root:not(.is-detailed) .bingo-cell:hover .bingo-cell-mid,
-    .bingo-board-root:not(.is-detailed) .bingo-cell:hover .bingo-cell-bot {{
+    .bingo-board-root:not(.is-detailed):not(.is-player-board) .bingo-cell:hover .bingo-cell-mid,
+    .bingo-board-root:not(.is-detailed):not(.is-player-board) .bingo-cell:hover .bingo-cell-bot {{
         opacity: 1;
         transform: translateY(0);
         transition-delay: 0.05s;
     }}
-    .bingo-board-root:not(.is-detailed) .bingo-cell:hover .bingo-cell-top {{
+    .bingo-board-root:not(.is-detailed):not(.is-player-board) .bingo-cell:hover .bingo-cell-top {{
         min-height: 3.5rem;
         height: auto;
     }}
-    .bingo-board-root:not(.is-detailed) .bingo-cell:hover .bingo-cell-header {{
+    .bingo-board-root:not(.is-detailed):not(.is-player-board) .bingo-cell:hover .bingo-cell-header {{
         top: 0;
         transform: translateY(0);
     }}
-    .bingo-board-root:not(.is-detailed) .bingo-cell:hover .bingo-cell-song {{
+    .bingo-board-root:not(.is-detailed):not(.is-player-board) .bingo-cell:hover .bingo-cell-song {{
         font-size: 0.95rem;
         -webkit-line-clamp: 2;
     }}
-    .bingo-board-root:not(.is-detailed) .bingo-cell:hover .bingo-cell-diff {{
+    .bingo-board-root:not(.is-detailed):not(.is-player-board) .bingo-cell:hover .bingo-cell-diff {{
         font-size: 0.88rem;
         margin-top: 0.1rem;
     }}
     .bingo-board-root.is-detailed .bingo-cell {{
         grid-template-rows: minmax(3.5rem, auto) minmax(4.25rem, 1fr) minmax(2.15rem, auto);
-        transition: grid-template-rows 0.28s ease;
     }}
     .bingo-board-root.is-detailed .bingo-cell-mid,
     .bingo-board-root.is-detailed .bingo-cell-bot {{
@@ -3688,10 +4118,159 @@ def _bingo_board_component_css(*, cols: int, rows: int) -> str:
         margin-top: 0.1rem;
         transition: font-size 0.28s ease, margin-top 0.28s ease;
     }}
+    .bingo-board-root.has-player-data .bingo-cell-view {{
+        transition: opacity 0.22s ease;
+    }}
+    .bingo-board-root.has-player-data:not(.is-player-board) .bingo-cell-player-view {{
+        opacity: 0;
+        pointer-events: none;
+    }}
+    .bingo-board-root.has-player-data:not(.is-detailed):not(.is-player-board) .bingo-cell {{
+        grid-template-rows: 1fr 0fr;
+    }}
+    .bingo-board-root.has-player-data:not(.is-detailed):not(.is-player-board) .bingo-cell-body {{
+        overflow: hidden;
+        min-height: 0;
+    }}
+    .bingo-board-root.has-player-data:not(.is-detailed):not(.is-player-board) .bingo-cell:hover {{
+        grid-template-rows: minmax(3.5rem, auto) 1fr;
+    }}
+    .bingo-board-root.has-player-data.is-detailed .bingo-cell {{
+        grid-template-rows: minmax(3.5rem, auto) 1fr;
+    }}
+    .bingo-board-root.has-player-data.is-detailed .bingo-cell-body {{
+        position: relative;
+        min-height: 0;
+        display: grid;
+        grid-template-rows: minmax(4.25rem, 1fr) minmax(2.15rem, auto);
+    }}
+    .bingo-board-root.has-player-data.is-detailed .bingo-cell-view {{
+        grid-row: 1 / -1;
+        grid-column: 1;
+        display: grid;
+        grid-template-rows: minmax(4.25rem, 1fr) minmax(2.15rem, auto);
+    }}
+    .bingo-board-root.has-player-data.is-detailed .bingo-cell-team-view {{
+        opacity: 1;
+        pointer-events: auto;
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+        height: 100%;
+    }}
+    .bingo-board-root.has-player-data.is-detailed .bingo-cell-player-view {{
+        opacity: 0;
+        pointer-events: none;
+    }}
+    .bingo-board-root.has-player-data:not(.is-detailed):not(.is-player-board) .bingo-cell:hover .bingo-cell-body {{
+        min-height: 0;
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+    }}
+    .bingo-board-root.has-player-data:not(.is-detailed):not(.is-player-board) .bingo-cell:hover .bingo-cell-team-view {{
+        display: flex;
+        flex-direction: column;
+        flex: 1 1 auto;
+        min-height: 0;
+        height: 100%;
+    }}
+    .bingo-board-root.has-player-data.is-detailed .bingo-cell-team-view .bingo-cell-mid,
+    .bingo-board-root.has-player-data:not(.is-detailed):not(.is-player-board) .bingo-cell:hover .bingo-cell-team-view .bingo-cell-mid {{
+        flex: 1 1 auto;
+        opacity: 1;
+        transform: none;
+    }}
+    .bingo-board-root.has-player-data.is-detailed .bingo-cell-team-view .bingo-cell-bot,
+    .bingo-board-root.has-player-data:not(.is-detailed):not(.is-player-board) .bingo-cell:hover .bingo-cell-team-view .bingo-cell-bot {{
+        flex: 0 0 auto;
+        margin-top: auto;
+        opacity: 1;
+        transform: none;
+    }}
+    .bingo-board-root.is-player-board.has-player-data .bingo-cell {{
+        grid-template-rows: minmax(3.5rem, auto) minmax(6.4rem, 1fr);
+    }}
+    .bingo-board-root.is-player-board.has-player-data .bingo-cell-top {{
+        min-height: 3.5rem;
+        height: auto;
+    }}
+    .bingo-board-root.is-player-board.has-player-data .bingo-cell-header {{
+        position: absolute;
+        left: 0;
+        right: 0;
+        width: 100%;
+        top: 0;
+        transform: translateY(0);
+    }}
+    .bingo-board-root.is-player-board.has-player-data .bingo-cell-song {{
+        font-size: 0.95rem;
+        -webkit-line-clamp: 2;
+    }}
+    .bingo-board-root.is-player-board.has-player-data .bingo-cell-diff {{
+        font-size: 0.88rem;
+        margin-top: 0.1rem;
+    }}
+    .bingo-board-root.is-player-board.has-player-data .bingo-cell-body {{
+        position: relative;
+        min-height: 0;
+        display: grid;
+        grid-template-rows: minmax(4.25rem, 1fr) minmax(2.15rem, auto);
+    }}
+    .bingo-board-root.is-player-board.has-player-data .bingo-cell-view {{
+        grid-row: 1 / -1;
+        grid-column: 1;
+        display: grid;
+        grid-template-rows: minmax(4.25rem, 1fr) minmax(2.15rem, auto);
+    }}
+    .bingo-board-root.is-player-board.has-player-data .bingo-cell-team-view {{
+        opacity: 0;
+        pointer-events: none;
+    }}
+    .bingo-board-root.is-player-board.has-player-data .bingo-cell-player-view {{
+        opacity: 1;
+        pointer-events: auto;
+    }}
+    .bingo-board-root.is-player-board.has-player-data .bingo-cell-player-view .bingo-cell-mid,
+    .bingo-board-root.is-player-board.has-player-data .bingo-cell-player-view .bingo-cell-bot {{
+        opacity: 1;
+        transform: none;
+    }}
+    .bingo-board-root.is-player-board.has-player-data .bingo-cell:hover {{
+        z-index: 6;
+    }}
+    .bingo-board-root.is-player-board.has-player-data .bingo-cell:hover .bingo-cell-team-view {{
+        opacity: 1;
+        pointer-events: auto;
+    }}
+    .bingo-board-root.is-player-board.has-player-data .bingo-cell:hover .bingo-cell-player-view {{
+        opacity: 0;
+        pointer-events: none;
+    }}
+    .bingo-cell-body {{
+        min-height: 0;
+    }}
+    .bingo-cell-player-footer {{
+        width: 100%;
+        color: rgba(245, 245, 245, 0.96);
+        font-size: 1.05rem;
+        font-weight: 700;
+        line-height: 1.15;
+        padding: 0.2rem 0.4rem;
+        box-sizing: border-box;
+    }}
+    .bingo-cell-player-score {{
+        color: rgba(245, 245, 245, 0.96) !important;
+    }}
+    .bingo-cell-player-view .bingo-cell-bot {{
+        justify-content: center;
+        align-items: center;
+        min-height: 2.15rem;
+    }}
     .bingo-cell {{
         --bingo-cell-bg: {BINGO_CELL_BG};
         position: relative;
-        background: var(--bingo-cell-bg);
+        background-color: var(--bingo-cell-bg);
         color: #eaeaea;
         text-align: center;
         padding: 0.6rem 0.4rem 0.55rem;
@@ -3704,7 +4283,25 @@ def _bingo_board_component_css(*, cols: int, rows: int) -> str:
         box-sizing: border-box;
         border: none;
         overflow: hidden;
-        transition: grid-template-rows 0.28s ease;
+        transition: background-color 0.22s ease, grid-template-rows 0.28s ease;
+    }}
+    .bingo-board-root.hide-colors:not(.is-detailed):not(.is-player-board) .bingo-cell,
+    .bingo-board-root.hide-colors.is-detailed .bingo-cell,
+    .bingo-board-root.hide-colors.is-player-board.has-player-data .bingo-cell,
+    .bingo-board-root.hide-colors .bingo-cell {{
+        background-color: {BINGO_CELL_BG};
+    }}
+    .bingo-board-root.hide-colors:not(.is-detailed):not(.is-player-board) .bingo-cell:hover,
+    .bingo-board-root.hide-colors.is-detailed .bingo-cell:hover,
+    .bingo-board-root.hide-colors.is-player-board.has-player-data .bingo-cell:hover,
+    .bingo-board-root.hide-colors .bingo-cell:hover {{
+        background-color: var(--bingo-cell-bg);
+    }}
+    .bingo-board-root.hide-colors .bingo-cell-claim-outline {{
+        opacity: 0;
+    }}
+    .bingo-board-root.hide-colors .bingo-cell:hover .bingo-cell-claim-outline {{
+        opacity: 1;
     }}
     .bingo-cell-link {{
         cursor: pointer;
@@ -3719,6 +4316,8 @@ def _bingo_board_component_css(*, cols: int, rows: int) -> str:
         z-index: 5;
         pointer-events: none;
         box-sizing: border-box;
+        opacity: 1;
+        transition: opacity 0.22s ease;
     }}
     .bingo-line-svg {{
         position: absolute;
@@ -3744,8 +4343,12 @@ def _bingo_board_component_css(*, cols: int, rows: int) -> str:
         flex-direction: column;
         justify-content: flex-start;
         align-items: center;
+        transition: min-height 0.28s ease, height 0.28s ease;
     }}
-    .bingo-cell-header {{ width: 100%; }}
+    .bingo-cell-header {{
+        width: 100%;
+        transition: top 0.28s ease, transform 0.28s ease;
+    }}
     .bingo-cell-bot {{
         min-height: 2.15rem;
         display: flex;
@@ -3771,6 +4374,7 @@ def _bingo_board_component_css(*, cols: int, rows: int) -> str:
         -webkit-box-orient: vertical;
         -webkit-line-clamp: 2;
         overflow: hidden;
+        transition: font-size 0.28s ease;
     }}
     .bingo-cell-diff {{
         font-size: 0.88rem;
@@ -3779,6 +4383,7 @@ def _bingo_board_component_css(*, cols: int, rows: int) -> str:
         width: 100%;
         margin-top: 0.1rem;
         color: rgba(234, 234, 234, 0.82);
+        transition: font-size 0.28s ease, margin-top 0.28s ease;
     }}
     .bingo-cell-leader {{
         font-weight: 800;
@@ -3940,6 +4545,9 @@ def _bingo_board_component_css(*, cols: int, rows: int) -> str:
         color: transparent;
         font-size: 0;
         user-select: none;
+    }}
+    .bingo-chart-modal-table tbody tr.bingo-chart-modal-row--highlighted td {{
+        background: rgba(255, 255, 255, 0.085);
     }}
     .bingo-chart-modal-proof-badge,
     .bingo-chart-modal-proof-btn {{
@@ -4153,13 +4761,27 @@ def _build_bingo_board_interactive_html(
           function syncBoardModes() {{
             let detailed = false;
             let hideLines = false;
+            let hideColors = false;
+            let playerBoard = false;
             try {{
               const parentDoc = window.parent.document;
               detailed = !!parentDoc.querySelector(".bingo-detailed-toggle:checked");
+              hideColors = !!parentDoc.querySelector(".bingo-colors-toggle:checked");
               hideLines = !!parentDoc.querySelector(".bingo-lines-toggle:checked");
+              const playerToggle = parentDoc.querySelector(".bingo-player-board-toggle");
+              playerBoard = !!(
+                playerToggle &&
+                !playerToggle.disabled &&
+                playerToggle.checked
+              );
+              if (detailed && playerBoard) {{
+                playerBoard = false;
+              }}
             }} catch (error) {{}}
             root.classList.toggle("is-detailed", detailed);
-            root.classList.toggle("hide-lines", hideLines);
+            root.classList.toggle("is-player-board", playerBoard);
+            root.classList.toggle("hide-colors", hideColors);
+            root.classList.toggle("hide-lines", hideLines || hideColors);
           }}
 
           function finishCloseModal() {{
@@ -4276,6 +4898,7 @@ def _render_bingo_board_component(
     modal_payload: dict[str, dict[str, str]],
     snapshot_label: str,
     updated_ms: int | None,
+    has_player_data: bool = False,
 ) -> None:
     inner_html = _build_bingo_board_interactive_html(
         cells_html=cells_html,
@@ -4284,11 +4907,14 @@ def _render_bingo_board_component(
         snapshot_label=snapshot_label,
         updated_ms=updated_ms,
     )
+    root_classes = "bingo-board-root"
+    if has_player_data:
+        root_classes += " has-player-data"
     component_html = (
         "<!DOCTYPE html><html><head><meta charset='utf-8'><style>"
         + _bingo_board_component_css(cols=cols, rows=rows)
         + "</style></head><body>"
-        + f'<div class="bingo-board-root" id="bingo-board-root">{inner_html}</div>'
+        + f'<div class="{root_classes}" id="bingo-board-root">{inner_html}</div>'
         + "</body></html>"
     )
     components.html(
@@ -4338,6 +4964,8 @@ def _bingo_chart_proof_icon_html(entry: BingoChartLeaderboardEntry) -> str:
 
 def _render_bingo_chart_leaderboard_table_html(
     entries: list[BingoChartLeaderboardEntry],
+    *,
+    highlight_player_id: str | None = None,
 ) -> str:
     if not entries:
         return (
@@ -4355,8 +4983,13 @@ def _render_bingo_chart_leaderboard_table_html(
         player = html.escape(entry.display_name)
         score = html.escape(format_leader_score(entry.score))
         proof_icon = _bingo_chart_proof_icon_html(entry)
+        row_class = (
+            " bingo-chart-modal-row--highlighted"
+            if highlight_player_id is not None and entry.player_id == highlight_player_id
+            else ""
+        )
         rows.append(
-            "<tr>"
+            f'<tr class="{row_class.strip()}">'
             f'<td class="bingo-chart-modal-rank">{rank}</td>'
             f'<td class="bingo-chart-modal-player" style="color:{team_color};">'
             f"{player}</td>"
@@ -4457,6 +5090,9 @@ def _render_bingo_board_fragment(
         leaders_by_coord, rows=rows, cols=cols
     )
 
+    teams = _cached_bingo_teams()
+    view_player = _render_bingo_player_view_controls(teams)
+
     for row in range(rows):
         for col in range(cols):
             chart = by_coord.get((row, col))
@@ -4469,6 +5105,18 @@ def _render_bingo_board_fragment(
                 if chart.group is not None
                 else None
             )
+            player_score: int | None = None
+            player_max_score_label: str | None = None
+            if view_player is not None:
+                player_score = _player_chart_score(
+                    chart,
+                    player_id=view_player.player_id,
+                    leaderboard_by_chart=leaderboard_by_chart,
+                )
+                player_max_score_label = _format_player_max_score_label(
+                    chart,
+                    int(player_score),
+                )
             cells_html.append(
                 _render_cell_html(
                     standing,
@@ -4477,6 +5125,9 @@ def _render_bingo_board_fragment(
                     bingo_segments=line_segments.get((row, col), []),
                     rows=rows,
                     cols=cols,
+                    view_player=view_player,
+                    player_score=player_score,
+                    player_max_score_label=player_max_score_label,
                 )
             )
 
@@ -4486,6 +5137,9 @@ def _render_bingo_board_fragment(
         charts,
         leaderboard_by_chart,
         roster=_cached_bingo_teams(),
+        highlight_player_id=(
+            view_player.player_id if view_player is not None else None
+        ),
     )
     updated_ms = (
         int(float(st.session_state.bingo_last_updated) * 1000)
@@ -4495,6 +5149,10 @@ def _render_bingo_board_fragment(
     with st.container(key="bingo_board_viewport"):
         _render_bingo_board_toolbar(
             show_refresh=view_day is None and _bingo_game_is_active(settings=settings),
+            player_board_enabled=view_player is not None,
+            auto_enable_player_board=bool(
+                st.session_state.pop("bingo_auto_enable_player_board", False)
+            ),
         )
         _render_bingo_board_component(
             cells_html=cells_html,
@@ -4506,6 +5164,7 @@ def _render_bingo_board_fragment(
                 day_count=day_count,
             ),
             updated_ms=updated_ms,
+            has_player_data=view_player is not None,
         )
     _render_bingo_day_view_controls(completed_days, day_count=day_count)
     highlight_day = view_day
@@ -4515,6 +5174,9 @@ def _render_bingo_board_fragment(
             day_count=day_count,
         )
     _inject_scoreboard_day_highlight(highlight_day, day_count=day_count)
+    _inject_scoreboard_player_row_highlight(
+        view_player.team if view_player is not None else None
+    )
 
 
 def _commit_pending_bingo_submission() -> None:
