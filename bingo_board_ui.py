@@ -24,6 +24,7 @@ from rating.bingo import (
     TEAM_ORDER,
     bingo_charts_on_board,
     bingo_day_end,
+    bingo_day_multiplier,
     bingo_has_started,
     bingo_in_progress_day,
     build_cell_standing,
@@ -1745,7 +1746,11 @@ def build_bingo_board_css() -> str:
     """
 
 
-def _inject_scoreboard_day_highlight(highlight_day: int | None) -> None:
+def _inject_scoreboard_day_highlight(
+    highlight_day: int | None,
+    *,
+    day_count: int,
+) -> None:
     """Update scoreboard column highlight via CSS only (table itself stays mounted)."""
     if highlight_day is None:
         rule = ""
@@ -1755,8 +1760,25 @@ def _inject_scoreboard_day_highlight(highlight_day: int | None) -> None:
         fill = (
             "linear-gradient(rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.04))"
         )
+        multiplier_golden = _bingo_scoreboard_multiplier_highlight_days(
+            day,
+            day_count=day_count,
+        )
+        multiplier_golden_css = ""
+        if multiplier_golden:
+            selectors = ",\n        ".join(
+                ".bingo-scoreboard thead .bingo-sb-multiplier[data-day="
+                f'"{golden_day}"]'
+                for golden_day in sorted(multiplier_golden)
+            )
+            multiplier_golden_css = f"""
+        {selectors} {{
+          color: rgba(245, 213, 71, 0.96) !important;
+          font-weight: 800 !important;
+        }}
+        """
         rule = f"""
-        .bingo-scoreboard thead th[data-day="{day}"] {{
+        .bingo-scoreboard thead tr:not(.bingo-sb-multiplier-row) th[data-day="{day}"] {{
           color: #ffffff !important;
           font-weight: 800 !important;
           background-image: {fill} !important;
@@ -1765,6 +1787,7 @@ def _inject_scoreboard_day_highlight(highlight_day: int | None) -> None:
             inset -2px 0 0 0 {edge},
             inset 0 2px 0 0 {edge} !important;
         }}
+        {multiplier_golden_css}
         .bingo-scoreboard tbody td[data-day="{day}"] {{
           background-image: {fill} !important;
           box-shadow:
@@ -1785,7 +1808,7 @@ def _inject_scoreboard_day_highlight(highlight_day: int | None) -> None:
           box-shadow: none !important;
           background-image: none !important;
         }}
-        .bingo-scoreboard thead th[data-day] {{
+        .bingo-scoreboard thead tr:not(.bingo-sb-multiplier-row) th[data-day] {{
           color: rgba(234, 234, 234, 0.88) !important;
           font-weight: 700 !important;
         }}
@@ -1793,6 +1816,66 @@ def _inject_scoreboard_day_highlight(highlight_day: int | None) -> None:
         </style>
         """,
         unsafe_allow_html=True,
+    )
+
+
+def _bingo_scoreboard_multiplier_label(day: int, *, day_count: int) -> str:
+    multiplier = bingo_day_multiplier(day, day_count)
+    if multiplier <= 1:
+        return ""
+    if day > 1:
+        previous = bingo_day_multiplier(day - 1, day_count)
+        if multiplier == previous:
+            return "→"
+    return f"×{multiplier}"
+
+
+def _bingo_scoreboard_multiplier_highlight_days(
+    highlight_day: int,
+    *,
+    day_count: int,
+) -> set[int]:
+    """Days in the multiplier row to show golden for the selected column."""
+    day = int(highlight_day)
+    multiplier = bingo_day_multiplier(day, day_count)
+    if multiplier <= 1:
+        return set()
+    start = day
+    while start > 1 and bingo_day_multiplier(start - 1, day_count) == multiplier:
+        start -= 1
+    golden: set[int] = set()
+    for candidate in range(start, day + 1):
+        if _bingo_scoreboard_multiplier_label(candidate, day_count=day_count):
+            golden.add(candidate)
+    return golden
+
+
+def _bingo_scoreboard_multiplier_headers_html(*, day_count: int) -> str:
+    cells: list[str] = []
+    for day in range(1, day_count + 1):
+        label = _bingo_scoreboard_multiplier_label(day, day_count=day_count)
+        if not label:
+            cells.append(
+                f'<th class="bingo-sb-multiplier bingo-sb-multiplier--empty" '
+                f'data-day="{day}" scope="col"></th>'
+            )
+        elif label == "→":
+            cells.append(
+                f'<th class="bingo-sb-multiplier bingo-sb-multiplier--repeat" '
+                f'data-day="{day}" scope="col" '
+                'aria-label="Same multiplier as previous day">→</th>'
+            )
+        else:
+            cells.append(
+                f'<th class="bingo-sb-multiplier bingo-sb-multiplier--value" '
+                f'data-day="{day}" scope="col">{html.escape(label)}</th>'
+            )
+    return (
+        '<tr class="bingo-sb-multiplier-row">'
+        '<th class="bingo-sb-team bingo-sb-multiplier-label" scope="col"></th>'
+        f'{"".join(cells)}'
+        '<th class="bingo-sb-runs bingo-sb-multiplier-label" scope="col"></th>'
+        "</tr>"
     )
 
 
@@ -1804,6 +1887,9 @@ def _render_bingo_scoreboard(
     day_headers_html = "".join(
         f'<th class="bingo-sb-day" data-day="{day}" scope="col">{day}</th>'
         for day in range(1, scoreboard.day_count + 1)
+    )
+    multiplier_headers_html = _bingo_scoreboard_multiplier_headers_html(
+        day_count=scoreboard.day_count
     )
     rows_html: list[str] = []
     scoreboard_row_bg = {
@@ -1946,6 +2032,38 @@ def _render_bingo_scoreboard(
             font-weight: 700 !important;
             letter-spacing: 0.06em !important;
           }}
+          .bingo-scoreboard thead tr.bingo-sb-multiplier-row th {{
+            box-shadow: none !important;
+            border-top: none !important;
+            border-left: none !important;
+            border-right: none !important;
+            border-bottom: 1px solid rgba(234, 234, 234, 0.14) !important;
+            color: rgba(234, 234, 234, 0.52);
+            vertical-align: middle !important;
+            padding-top: 0.35rem !important;
+            padding-bottom: 0.35rem !important;
+          }}
+          .bingo-scoreboard thead tr.bingo-sb-multiplier-row .bingo-sb-runs {{
+            border-left: none !important;
+          }}
+          .bingo-sb-multiplier {{
+            width: 4.15rem;
+            min-width: 4.15rem;
+            max-width: 4.15rem;
+            box-sizing: border-box;
+            font-size: 0.72rem;
+            font-weight: 700;
+            letter-spacing: 0.02em;
+            line-height: 1;
+          }}
+          .bingo-sb-multiplier--value,
+          .bingo-sb-multiplier--repeat {{
+            color: rgba(234, 234, 234, 0.36);
+          }}
+          .bingo-sb-multiplier--repeat {{
+            font-size: 0.82rem;
+            font-weight: 600;
+          }}
           .bingo-sb-day,
           .bingo-sb-score,
           .bingo-sb-runs,
@@ -2007,6 +2125,7 @@ def _render_bingo_scoreboard(
           <div class="bingo-scoreboard-frame">
             <table class="bingo-scoreboard" aria-label="Bingo daily points scoreboard">
               <thead>
+                {multiplier_headers_html}
                 <tr>
                 <th class="bingo-sb-team bingo-sb-day-label" scope="col">Day</th>
                 {day_headers_html}
@@ -4395,7 +4514,7 @@ def _render_bingo_board_fragment(
             start_time=settings.start_time,
             day_count=day_count,
         )
-    _inject_scoreboard_day_highlight(highlight_day)
+    _inject_scoreboard_day_highlight(highlight_day, day_count=day_count)
 
 
 def _commit_pending_bingo_submission() -> None:
@@ -4506,7 +4625,10 @@ def render_bingo_board() -> None:
 
         if scoreboard is None:
             try:
-                scoreboard = compute_bingo_scoreboard(settings=settings, charts=charts)
+                scoreboard = compute_bingo_scoreboard(
+                    settings=settings,
+                    charts=charts,
+                )
             except Exception as exc:
                 st.error(f"Failed to load Bingo scoreboard: {exc}")
                 scoreboard = None
