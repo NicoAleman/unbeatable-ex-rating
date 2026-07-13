@@ -192,4 +192,5 @@ curl -X POST http://localhost:8000/submit `
 ## See also
 
 - [`LEADERBOARD_API.md`](LEADERBOARD_API.md) — database schema, EX Rating formulas, SQL reference
+- [`BINGO_MOD_API.md`](BINGO_MOD_API.md) — Bingo score upload mod contract
 - Mod repo `resources/RENDER_BACKEND.md` — mod-facing contract
