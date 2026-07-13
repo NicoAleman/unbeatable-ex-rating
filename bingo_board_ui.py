@@ -16,6 +16,7 @@ from rating.bingo import (
     BingoCellStanding,
     BingoChart,
     BingoChartLeaderboardEntry,
+    BingoFinalStandings,
     BingoScoreboard,
     BingoSettings,
     BingoSquareClaimEvent,
@@ -28,6 +29,7 @@ from rating.bingo import (
     build_cell_standing,
     completed_bingo_days,
     compute_bingo_scoreboard,
+    compute_bingo_final_standings,
     find_bingo_runs,
     format_leader_score,
     format_score_diff,
@@ -114,6 +116,38 @@ BINGO_APP_RERUN_KEY = "bingo_app_rerun_requested"
 BINGO_AUTO_REFRESH_STALE_SECONDS = 600
 
 
+def _bingo_game_is_active(*, settings: BingoSettings) -> bool:
+    """True while a competition day is currently in progress."""
+    return (
+        bingo_in_progress_day(
+            start_time=settings.start_time,
+            day_count=settings.day_count,
+        )
+        is not None
+    )
+
+
+def _bingo_game_has_ended(*, settings: BingoSettings) -> bool:
+    if settings.start_time is None or settings.day_count is None:
+        return False
+    return (
+        completed_bingo_days(
+            start_time=settings.start_time,
+            day_count=int(settings.day_count),
+        )
+        >= int(settings.day_count)
+    )
+
+
+def _bingo_supports_live_refresh(*, settings: BingoSettings) -> bool:
+    """True before start or during active days — not after the game ends."""
+    if settings.start_time is None or settings.day_count is None:
+        return False
+    if _bingo_game_is_active(settings=settings):
+        return True
+    return not bingo_has_started(start_time=settings.start_time)
+
+
 def _request_bingo_app_rerun(*, touch_live: bool = True) -> None:
     """Queue a full-app rerun (must be consumed outside Streamlit callbacks)."""
     if touch_live:
@@ -134,15 +168,29 @@ def _on_bingo_refresh() -> None:
     _request_bingo_app_rerun()
 
 
-def _consume_bingo_auto_refresh_query() -> None:
-    """After a JS-triggered full reload, bump the live clock and clear caches."""
-    if not st.query_params.get("bingo_auto"):
-        return
-    _touch_bingo_live_updated()
-    _cached_bingo_charts.clear()
-    _cached_bingo_teams.clear()
-    _cached_bingo_claim_feed.clear()
-    del st.query_params["bingo_auto"]
+def _render_bingo_auto_refresh_trigger() -> None:
+    """Hidden button clicked by the countdown iframe to match manual refresh."""
+    st.markdown(
+        """
+        <style>
+        .st-key-bingo_auto_refresh_trigger,
+        .st-key-bingo-auto-refresh-trigger {
+            display: none !important;
+            visibility: hidden !important;
+            height: 0 !important;
+            overflow: hidden !important;
+            margin: 0 !important;
+            padding: 0 !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.button(
+        "Auto refresh",
+        key="bingo_auto_refresh_trigger",
+        on_click=_on_bingo_refresh,
+    )
 
 
 def _touch_bingo_live_updated() -> None:
@@ -154,7 +202,7 @@ def _touch_bingo_live_updated() -> None:
 
 
 def _difficulty_label(difficulty: str, level: int | None) -> str:
-    diff = format_difficulty_display_name(difficulty).upper()
+    diff = format_difficulty_display_name(difficulty)
     if level is None:
         return f"[{diff}]"
     return f"[{diff} - {level}]"
@@ -268,10 +316,14 @@ def _inject_bingo_board_layout_css(board_width: str) -> None:
 
 
 def _render_bingo_board_toolbar(*, show_refresh: bool = True) -> None:
-    if "bingo_last_updated" not in st.session_state:
-        _touch_bingo_live_updated()
-    updated_ms = int(float(st.session_state.bingo_last_updated) * 1000)
-    updated_nonce = int(st.session_state.get("bingo_live_updated_nonce", 0))
+    if show_refresh:
+        if "bingo_last_updated" not in st.session_state:
+            _touch_bingo_live_updated()
+        updated_ms = int(float(st.session_state.bingo_last_updated) * 1000)
+        updated_nonce = int(st.session_state.get("bingo_live_updated_nonce", 0))
+    else:
+        updated_ms = 0
+        updated_nonce = 0
 
     st.markdown(
         """
@@ -482,11 +534,29 @@ def _format_bingo_schedule(settings: BingoSettings) -> str | None:
     return f"{_label(start_local)} - {_label(end_local)}"
 
 
+def _bingo_podium_html(standings: BingoFinalStandings) -> str:
+    lines: list[str] = []
+    for place, team in ((2, standings.second), (3, standings.third)):
+        if not team:
+            continue
+        label = "2nd." if place == 2 else "3rd."
+        color = html.escape(TEAM_TEXT_COLORS.get(team, "#eaeaea"))
+        team_name = html.escape(team)
+        lines.append(
+            f'<div class="bingo-countdown-podium-line">'
+            f'<span class="bingo-countdown-podium-rank">{label} </span>'
+            f'<span class="bingo-countdown-podium-team" style="color:{color};">'
+            f"Team {team_name}</span></div>"
+        )
+    return "".join(lines)
+
+
 def _render_bingo_countdown(
     settings: BingoSettings,
     *,
     live_view: bool,
     updated_ms: int | None = None,
+    final_standings: BingoFinalStandings | None = None,
 ) -> None:
     if settings.start_time is None or settings.day_count is None:
         return
@@ -499,6 +569,14 @@ def _render_bingo_countdown(
     stale_ms = BINGO_AUTO_REFRESH_STALE_SECONDS * 1000
     updated_ms_json = "null" if updated_ms is None else str(int(updated_ms))
     live_view_json = "true" if live_view else "false"
+    winner_team = final_standings.first if final_standings else None
+    winner_color = (
+        TEAM_TEXT_COLORS.get(final_standings.first, "#eaeaea")
+        if final_standings
+        else None
+    )
+    winner_team_json = json.dumps(winner_team)
+    winner_color_json = json.dumps(winner_color)
 
     components.html(
         f"""
@@ -542,6 +620,8 @@ def _render_bingo_countdown(
           const staleMs = {stale_ms};
           const liveView = {live_view_json};
           const updatedMs = {updated_ms_json};
+          const winnerTeam = {winner_team_json};
+          const winnerColor = {winner_color_json};
           const labelEl = document.getElementById("bingo-countdown-label");
           const timerEl = document.getElementById("bingo-countdown-timer");
 
@@ -558,6 +638,31 @@ def _render_bingo_countdown(
             return days + "d " + pad(hours) + "h " + pad(minutes) + "m " + pad(seconds) + "s";
           }}
 
+          function findAutoRefreshButton(doc) {{
+            const selectors = [
+              ".st-key-bingo_auto_refresh_trigger button",
+              ".st-key-bingo-auto-refresh-trigger button",
+            ];
+            for (const selector of selectors) {{
+              const button = doc.querySelector(selector);
+              if (button) {{
+                return button;
+              }}
+            }}
+            return null;
+          }}
+
+          function clickAutoRefreshButton() {{
+            try {{
+              const button = findAutoRefreshButton(window.parent.document);
+              if (button) {{
+                button.click();
+                return true;
+              }}
+            }} catch (error) {{}}
+            return false;
+          }}
+
           function triggerAutoRefresh(storageKey, reason) {{
             try {{
               if (sessionStorage.getItem(storageKey) === "1") {{
@@ -565,13 +670,18 @@ def _render_bingo_countdown(
               }}
               sessionStorage.setItem(storageKey, "1");
             }} catch (error) {{}}
-            try {{
-              const url = new URL(window.parent.location.href);
-              url.searchParams.set("bingo_auto", reason);
-              window.parent.location.href = url.toString();
-            }} catch (error) {{
-              window.parent.location.reload();
+
+            if (clickAutoRefreshButton()) {{
+              return;
             }}
+
+            let attempts = 0;
+            const retry = setInterval(() => {{
+              attempts += 1;
+              if (clickAutoRefreshButton() || attempts >= 50) {{
+                clearInterval(retry);
+              }}
+            }}, 200);
           }}
 
           function scheduleAutoRefresh() {{
@@ -619,19 +729,37 @@ def _render_bingo_countdown(
             }}
           }}
 
+          function showWinnerMessage() {{
+            if (winnerTeam) {{
+              timerEl.textContent = "Team " + winnerTeam + " Wins!";
+              timerEl.style.color = winnerColor || "#eaeaea";
+              timerEl.style.fontVariantNumeric = "normal";
+              return;
+            }}
+            timerEl.textContent = "0d 00h 00m 00s";
+            timerEl.style.color = "#eaeaea";
+            timerEl.style.fontVariantNumeric = "tabular-nums";
+          }}
+
+          function showCountdownRemaining(ms) {{
+            timerEl.textContent = formatRemaining(ms);
+            timerEl.style.color = "#eaeaea";
+            timerEl.style.fontVariantNumeric = "tabular-nums";
+          }}
+
           function tick() {{
             const now = Date.now();
             const gameEndMs = startMs + dayCount * dayMs;
 
             if (now < startMs) {{
               labelEl.textContent = "Game Starts:";
-              timerEl.textContent = formatRemaining(startMs - now);
+              showCountdownRemaining(startMs - now);
               return;
             }}
 
             if (now >= gameEndMs) {{
               labelEl.textContent = "Game Ended";
-              timerEl.textContent = "0d 00h 00m 00s";
+              showWinnerMessage();
               return;
             }}
 
@@ -642,7 +770,7 @@ def _render_bingo_countdown(
             }} else {{
               labelEl.textContent = "Day " + dayIndex + " / " + dayCount + " Ends:";
             }}
-            timerEl.textContent = formatRemaining(dayEndMs - now);
+            showCountdownRemaining(dayEndMs - now);
           }}
 
           tick();
@@ -654,11 +782,45 @@ def _render_bingo_countdown(
     )
 
 
+def _render_bingo_final_podium(standings: BingoFinalStandings) -> None:
+    if not standings.second and not standings.third:
+        return
+    podium_html = _bingo_podium_html(standings)
+    st.markdown(
+        f"""
+        <style>
+        .bingo-header-podium {{
+            display: flex;
+            justify-content: center;
+            align-items: baseline;
+            gap: 2.25rem;
+            font-family: "Source Sans Pro", "Segoe UI", sans-serif;
+            margin-top: 0.35rem;
+            margin-bottom: 2.00rem;
+        }}
+        .bingo-countdown-podium-line {{
+            font-size: 1.35rem;
+            font-weight: 800;
+            line-height: 1.25;
+            letter-spacing: 0.02em;
+            white-space: nowrap;
+        }}
+        .bingo-countdown-podium-rank {{
+            color: #ffffff;
+        }}
+        </style>
+        <div class="bingo-header-podium">{podium_html}</div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def _render_bingo_header(
     settings: BingoSettings,
     *,
     live_view: bool,
     updated_ms: int | None = None,
+    final_standings: BingoFinalStandings | None = None,
 ) -> None:
     schedule = _format_bingo_schedule(settings)
     schedule_html = (
@@ -702,7 +864,10 @@ def _render_bingo_header(
             settings,
             live_view=live_view,
             updated_ms=updated_ms,
+            final_standings=final_standings,
         )
+        if final_standings is not None:
+            _render_bingo_final_podium(final_standings)
         st.markdown(
             '<span class="bingo-header-end-marker" style="display:none;"></span>',
             unsafe_allow_html=True,
@@ -1532,6 +1697,7 @@ def _render_bingo_scoreboard(
         "Rest": "#0c1814",
     }
     prospective_day = scoreboard.prospective_day if live_view else None
+    totals_are_prospective = live_view and prospective_day is not None
     for team in TEAM_ORDER:
         color = TEAM_TEXT_COLORS.get(team, "#eaeaea")
         row_bg = scoreboard_row_bg.get(team, BINGO_CELL_BG)
@@ -1564,12 +1730,21 @@ def _render_bingo_scoreboard(
                     f"{html.escape(str(value))}</td>"
                 )
         total = int(scoreboard.totals.get(team, 0))
+        if totals_are_prospective and prospective_day is not None:
+            prospective_value = scoreboard.daily_points.get(team, [])[
+                prospective_day - 1
+            ]
+            if prospective_value is not None:
+                total += int(prospective_value)
+        total_class = "bingo-sb-total"
+        if totals_are_prospective:
+            total_class += " bingo-sb-prospective"
         rows_html.append(
             "<tr>"
             f'<th class="bingo-sb-team" scope="row" style="color:{color};background:{row_bg};">'
             f"{html.escape(team.upper())}</th>"
             f'{"".join(cells)}'
-            f'<td class="bingo-sb-total" style="background:{row_bg};">'
+            f'<td class="{total_class}" style="background:{row_bg};">'
             f"{html.escape(str(total))}</td>"
             "</tr>"
         )
@@ -1682,7 +1857,8 @@ def _render_bingo_scoreboard(
             line-height: 1.15;
             color: rgba(245, 245, 245, 0.96);
           }}
-          .bingo-sb-score.bingo-sb-prospective {{
+          .bingo-sb-score.bingo-sb-prospective,
+          .bingo-sb-total.bingo-sb-prospective {{
             color: rgba(155, 162, 175, 0.55) !important;
             font-weight: 700 !important;
           }}
@@ -1755,13 +1931,67 @@ def _format_bingo_time_ago(value: datetime) -> str:
     return moment.astimezone(BINGO_DISPLAY_TZ).strftime("%b %d, %Y")
 
 
+def _render_bingo_impact_cell(team: str, delta: int, *, variant: str) -> str:
+    team_color = TEAM_TEXT_COLORS.get(team, "#eaeaea")
+    label = f"+{delta}" if delta > 0 else str(delta)
+    return (
+        f'<div class="bingo-activity-impact bingo-activity-impact--{variant}" '
+        f'style="color:{team_color};" title="{html.escape(team)}">'
+        f"{html.escape(label)}</div>"
+    )
+
+
+def _render_bingo_point_impacts_html(
+    point_impacts: tuple[tuple[str, int], ...],
+) -> str:
+    if not point_impacts:
+        return '<div class="bingo-activity-impacts"></div>'
+
+    gainers = [(team, delta) for team, delta in point_impacts if delta > 0]
+    losers = [(team, delta) for team, delta in point_impacts if delta < 0]
+
+    rows: list[str] = []
+    for team, delta in gainers:
+        rows.append(
+            '<div class="bingo-activity-impact-row bingo-activity-impact-row--gain">'
+            f"{_render_bingo_impact_cell(team, delta, variant='gain')}"
+            "</div>"
+        )
+    if len(losers) == 1:
+        team, delta = losers[0]
+        rows.append(
+            '<div class="bingo-activity-impact-row bingo-activity-impact-row--loss">'
+            f"{_render_bingo_impact_cell(team, delta, variant='loss')}"
+            "</div>"
+        )
+    elif len(losers) >= 2:
+        loss_cells = "".join(
+            _render_bingo_impact_cell(team, delta, variant="loss")
+            for team, delta in losers
+        )
+        rows.append(
+            '<div class="bingo-activity-impact-row bingo-activity-impact-row--loss">'
+            f"{loss_cells}"
+            "</div>"
+        )
+
+    layout_class = (
+        "bingo-activity-impacts--split"
+        if len(losers) >= 2
+        else "bingo-activity-impacts--single"
+    )
+    return (
+        f'<div class="bingo-activity-impacts {layout_class}">{"".join(rows)}</div>'
+    )
+
+
 def _render_bingo_claim_feed_item(event: BingoSquareClaimEvent) -> str:
     team_color = TEAM_TEXT_COLORS.get(event.team, "#eaeaea")
     tint = TEAM_ACTIVITY_TINTS.get(event.team, "rgba(234, 234, 234, 0.06)")
     player = html.escape(event.player_display_name)
     chart = html.escape(
         f"{event.chart_display_name} "
-        f"[{format_difficulty_display_name(event.difficulty).upper()}]"
+        f"[{format_difficulty_display_name(event.difficulty)}]"
     )
     time_ago = html.escape(_format_bingo_time_ago(event.created_at))
     if event.prev_team is None:
@@ -1799,6 +2029,7 @@ def _render_bingo_claim_feed_item(event: BingoSquareClaimEvent) -> str:
         f'<span class="bingo-activity-player" style="color:{team_color};" '
         f'title="{html.escape(event.team)}">{player}</span>'
         f'<span class="bingo-activity-action">{action}{badges_html}</span>'
+        f"{_render_bingo_point_impacts_html(event.point_impacts)}"
         f'<span class="bingo-activity-time">{time_ago}</span>'
         "</div>"
     )
@@ -1822,6 +2053,9 @@ def _render_bingo_activity_feed(*, settings: BingoSettings) -> None:
             --bingo-activity-item-height: 3.25rem;
             --bingo-activity-fade-height: 1.5rem;
             --bingo-activity-visible-items: {BINGO_ACTIVITY_FEED_VISIBLE_COUNT};
+            --bingo-activity-impacts-width-single: 2.1rem;
+            --bingo-activity-impacts-width-split: 2.9rem;
+            --bingo-activity-time-width: 5.5rem;
             width: 100%;
             position: relative;
           }}
@@ -1863,8 +2097,12 @@ def _render_bingo_activity_feed(*, settings: BingoSettings) -> None:
           }}
           .bingo-activity-item {{
             display: grid;
-            grid-template-columns: minmax(5.5rem, 8.5rem) minmax(0, 1fr) auto;
-        align-items: center;
+            grid-template-columns:
+              minmax(5.5rem, 8.5rem)
+              minmax(0, 1fr)
+              auto
+              var(--bingo-activity-time-width);
+            align-items: stretch;
             column-gap: 0.4rem;
             min-height: var(--bingo-activity-item-height);
             box-sizing: border-box;
@@ -1874,6 +2112,7 @@ def _render_bingo_activity_feed(*, settings: BingoSettings) -> None:
             border-left: 3px solid #6eb0ff;
           }}
           .bingo-activity-player {{
+            align-self: center;
             overflow: hidden;
             text-overflow: ellipsis;
             white-space: nowrap;
@@ -1887,10 +2126,60 @@ def _render_bingo_activity_feed(*, settings: BingoSettings) -> None:
             font-size: 0.95rem;
           }}
           .bingo-activity-action {{
+            align-self: center;
             min-width: 0;
             color: rgba(234, 234, 234, 0.88);
             font-size: 0.95rem;
             line-height: 1.3;
+          }}
+          .bingo-activity-impacts {{
+            display: flex;
+            flex-direction: column;
+            min-height: 2.5rem;
+            align-self: stretch;
+            justify-content: stretch;
+            border-radius: 0.35rem;
+            overflow: hidden;
+            box-sizing: border-box;
+          }}
+          .bingo-activity-impacts--single {{
+            width: var(--bingo-activity-impacts-width-single);
+            min-width: var(--bingo-activity-impacts-width-single);
+            max-width: var(--bingo-activity-impacts-width-single);
+          }}
+          .bingo-activity-impacts--split {{
+            width: var(--bingo-activity-impacts-width-split);
+            min-width: var(--bingo-activity-impacts-width-split);
+            max-width: var(--bingo-activity-impacts-width-split);
+          }}
+          .bingo-activity-impact-row {{
+            flex: 1 1 0;
+            display: flex;
+            flex-direction: row;
+            align-items: stretch;
+            min-height: 1.35rem;
+            min-width: 0;
+          }}
+          .bingo-activity-impact-row--gain {{
+            background: rgba(94, 224, 154, 0.28);
+          }}
+          .bingo-activity-impact-row--loss {{
+            background: rgba(255, 122, 132, 0.28);
+          }}
+          .bingo-activity-impact-row--loss .bingo-activity-impact + .bingo-activity-impact {{
+            border-left: 1px solid rgba(255, 255, 255, 0.14);
+          }}
+          .bingo-activity-impact {{
+            flex: 1 1 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-width: 0;
+            min-height: 1.35rem;
+            font-weight: 800;
+            font-size: 0.8125rem;
+            line-height: 1;
+            letter-spacing: 0.01em;
           }}
           .bingo-activity-chart {{
             color: rgba(245, 245, 245, 0.96);
@@ -1930,15 +2219,141 @@ def _render_bingo_activity_feed(*, settings: BingoSettings) -> None:
             border: 1px solid rgba(192, 132, 252, 0.42);
           }}
           .bingo-activity-time {{
+            align-self: center;
+            width: var(--bingo-activity-time-width);
+            min-width: var(--bingo-activity-time-width);
+            max-width: var(--bingo-activity-time-width);
             color: rgba(245, 245, 245, 0.45);
             font-size: 0.8125rem;
             white-space: nowrap;
+            text-align: right;
             justify-self: end;
+            overflow: hidden;
+            text-overflow: ellipsis;
           }}
           .bingo-activity-empty {{
             color: rgba(245, 245, 245, 0.55);
             font-size: 0.925rem;
             margin: 0;
+          }}
+          .st-key-bingo_activity_feed .st-key-bingo_activity_header_shell,
+          .st-key-bingo-activity-feed .st-key-bingo-activity-header-shell {{
+            margin-bottom: 0 !important;
+            padding-bottom: 0 !important;
+            width: 100% !important;
+            max-width: 720px !important;
+          }}
+          .st-key-bingo_activity_feed .st-key-bingo_activity_header_shell [data-testid="stVerticalBlock"],
+          .st-key-bingo-activity-feed .st-key-bingo-activity-header-shell [data-testid="stVerticalBlock"] {{
+            gap: 0 !important;
+          }}
+          .st-key-bingo_activity_feed .st-key-bingo_activity_header_shell [data-testid="stElementContainer"],
+          .st-key-bingo-activity-feed .st-key-bingo-activity-header-shell [data-testid="stElementContainer"] {{
+            margin: 0 !important;
+            padding: 0 !important;
+          }}
+          .st-key-bingo_activity_feed .st-key-bingo_activity_header_row > [data-testid="stElementContainer"]:last-child,
+          .st-key-bingo-activity-feed .st-key-bingo-activity-header-row > [data-testid="stElementContainer"]:last-child,
+          .st-key-bingo_activity_feed .st-key-bingo_activity_header_shell .st-key-bingo_activity_refresh,
+          .st-key-bingo-activity-feed .st-key-bingo-activity-header-shell .st-key-bingo-activity-refresh {{
+            margin: 0 1.0rem 0 0 !important;
+          }}
+          .st-key-bingo_activity_feed [data-testid="stVerticalBlock"]:has(.st-key-bingo_activity_header_shell),
+          .st-key-bingo-activity-feed [data-testid="stVerticalBlock"]:has(.st-key-bingo-activity-header-shell) {{
+            gap: 0.25rem !important;
+          }}
+          .st-key-bingo_activity_feed [data-testid="stMarkdownContainer"]:has(.bingo-activity-viewport),
+          .st-key-bingo-activity-feed [data-testid="stMarkdownContainer"]:has(.bingo-activity-viewport) {{
+            margin-top: 0 !important;
+            padding-top: 0 !important;
+          }}
+          .st-key-bingo_activity_feed [data-testid="stElementContainer"]:has(.bingo-activity-viewport),
+          .st-key-bingo-activity-feed [data-testid="stElementContainer"]:has(.bingo-activity-viewport) {{
+            margin-top: 0 !important;
+            padding-top: 0 !important;
+          }}
+          .st-key-bingo_activity_feed .st-key-bingo_activity_header_row,
+          .st-key-bingo-activity-feed .st-key-bingo-activity-header-row {{
+            width: 100% !important;
+            max-width: 720px !important;
+          }}
+          .st-key-bingo_activity_feed .st-key-bingo_activity_header_row [data-testid="stHorizontalBlock"],
+          .st-key-bingo-activity-feed .st-key-bingo-activity-header-row [data-testid="stHorizontalBlock"] {{
+            width: 100% !important;
+            align-items: flex-end !important;
+            justify-content: space-between !important;
+            gap: 0.75rem !important;
+          }}
+          .st-key-bingo_activity_feed .st-key-bingo_activity_header_row [data-testid="stHorizontalBlock"] > div:first-child,
+          .st-key-bingo-activity-feed .st-key-bingo-activity-header-row [data-testid="stHorizontalBlock"] > div:first-child {{
+            flex: 1 1 auto !important;
+            min-width: 0 !important;
+            width: auto !important;
+          }}
+          .st-key-bingo_activity_feed .st-key-bingo_activity_header_shell [data-testid="stCustomComponentV1"],
+          .st-key-bingo-activity-feed .st-key-bingo-activity-header-shell [data-testid="stCustomComponentV1"] {{
+            margin: 0 !important;
+            padding: 0 !important;
+            width: 100% !important;
+          }}
+          .st-key-bingo_activity_feed .st-key-bingo_activity_header_shell [data-testid="stCustomComponentV1"] iframe,
+          .st-key-bingo-activity-feed .st-key-bingo-activity-header-shell [data-testid="stCustomComponentV1"] iframe {{
+            width: 100% !important;
+            height: 2rem !important;
+            min-height: 0 !important;
+            display: block;
+          }}
+          .st-key-bingo_activity_refresh,
+          .st-key-bingo-activity-refresh {{
+            width: fit-content !important;
+            min-width: 0 !important;
+            flex: 0 0 auto !important;
+            padding: 0 !important;
+          }}
+          .st-key-bingo_activity_refresh [data-testid="stButton"],
+          .st-key-bingo-activity-refresh [data-testid="stButton"] {{
+            width: auto !important;
+            margin: 0 !important;
+            padding: 0 !important;
+          }}
+          .st-key-bingo_activity_refresh button,
+          .st-key-bingo-activity-refresh button {{
+            background-color: #008f68 !important;
+            border-color: #008f68 !important;
+            color: #ffffff !important;
+            width: 1.7rem !important;
+            height: 1.7rem !important;
+            min-width: 1.7rem !important;
+            min-height: 1.7rem !important;
+            max-width: 1.7rem !important;
+            max-height: 1.7rem !important;
+            padding: 0 !important;
+            margin: 0 !important;
+            border-radius: 999px !important;
+            display: inline-flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+            line-height: 1 !important;
+            gap: 0 !important;
+          }}
+          .st-key-bingo_activity_refresh button:hover,
+          .st-key-bingo-activity-refresh button:hover {{
+            background-color: #007a58 !important;
+            border-color: #007a58 !important;
+          }}
+          .st-key-bingo_activity_refresh button [data-testid="stIconMaterial"],
+          .st-key-bingo-activity-refresh button [data-testid="stIconMaterial"],
+          .st-key-bingo_activity_refresh button span,
+          .st-key-bingo-activity-refresh button span {{
+            font-size: 1.15rem !important;
+            line-height: 1 !important;
+            margin: 0 !important;
+            padding: 0 !important;
+          }}
+          .st-key-bingo_activity_refresh button svg,
+          .st-key-bingo-activity-refresh button svg {{
+            width: 1.15rem !important;
+            height: 1.15rem !important;
           }}
         </style>
         """,
@@ -1946,7 +2361,7 @@ def _render_bingo_activity_feed(*, settings: BingoSettings) -> None:
     )
 
     with st.container(key="bingo_activity_feed"):
-        st.subheader("Activity Feed")
+        _render_bingo_activity_feed_header(settings=settings)
         try:
             assert settings.start_time is not None
             events = load_bingo_square_claim_feed(
@@ -2725,7 +3140,116 @@ def _bingo_board_snapshot_label(
         return "Live board"
     if view_day >= day_count:
         return "Final Scores"
-    return f"Scores at end of Day {view_day}"
+    return f"at end of Day {view_day}"
+
+
+def _render_bingo_activity_feed_header(*, settings: BingoSettings) -> None:
+    game_ended = _bingo_game_has_ended(settings=settings)
+    show_as_of = not game_ended
+    updated_ms = 0
+    updated_nonce = 0
+    if show_as_of:
+        if "bingo_last_updated" not in st.session_state:
+            _touch_bingo_live_updated()
+        updated_ms = int(float(st.session_state.bingo_last_updated) * 1000)
+        updated_nonce = int(st.session_state.get("bingo_live_updated_nonce", 0))
+
+    as_of_html = (
+        f'<span class="bingo-activity-as-of" id="bingo-activity-as-of-{updated_nonce}-{updated_ms}"></span>'
+        if show_as_of
+        else ""
+    )
+    as_of_script = (
+        f"""
+        <script>
+          const updatedMs = {updated_ms};
+          const labelEl = document.getElementById("bingo-activity-as-of-{updated_nonce}-{updated_ms}");
+          function formatAgo(ms) {{
+            const seconds = Math.max(0, Math.floor((Date.now() - ms) / 1000));
+            if (seconds < 30) {{
+              return "seconds ago";
+            }}
+            if (seconds < 60) {{
+              return "30 seconds ago";
+            }}
+            const minutes = Math.floor(seconds / 60);
+            if (minutes < 60) {{
+              return minutes === 1 ? "1 minute ago" : minutes + " minutes ago";
+            }}
+            const hours = Math.floor(minutes / 60);
+            return hours === 1 ? "1 hour ago" : hours + " hours ago";
+          }}
+          function tick() {{
+            labelEl.textContent = "as of " + formatAgo(updatedMs);
+          }}
+          tick();
+          setInterval(tick, 1000);
+        </script>
+        """
+        if show_as_of
+        else ""
+    )
+
+    header_html = f"""
+            <div class="bingo-activity-header">
+              <span class="bingo-activity-title">Activity Feed</span>
+              {as_of_html}
+            </div>
+            <style>
+              html, body {{
+                margin: 0;
+                padding: 0;
+                background: transparent !important;
+                overflow: visible;
+              }}
+              .bingo-activity-header {{
+                display: inline-flex;
+                align-items: baseline;
+                gap: 0.55rem;
+                width: fit-content;
+                font-family: "Source Sans Pro", "Segoe UI", sans-serif;
+              }}
+              .bingo-activity-title {{
+                font-size: 1.625rem;
+                font-weight: 600;
+                color: rgb(250, 250, 250);
+                line-height: 1.2;
+              }}
+              .bingo-activity-as-of {{
+                font-size: 0.85rem;
+                font-weight: 600;
+                color: rgba(200, 205, 215, 0.88);
+                white-space: nowrap;
+              }}
+            </style>
+            {as_of_script}
+            """
+
+    with st.container(key="bingo_activity_header_shell"):
+        if show_as_of:
+            with st.container(
+                horizontal=True,
+                gap="small",
+                vertical_alignment="bottom",
+                key="bingo_activity_header_row",
+            ):
+                components.html(
+                    header_html,
+                    height=32,
+                )
+                st.button(
+                    "",
+                    key="bingo_activity_refresh",
+                    type="primary",
+                    icon=":material/refresh:",
+                    help="Refresh board",
+                    on_click=_on_bingo_refresh,
+                )
+        else:
+            components.html(
+                header_html,
+                height=32,
+            )
 
 
 def _build_bingo_chart_modal_payload(
@@ -3228,7 +3752,7 @@ def _build_bingo_board_interactive_html(
 
           function updateSubtitle() {{
             if (updatedMs !== null) {{
-              subtitleEl.textContent = "Scores as of " + formatAgo(updatedMs);
+              subtitleEl.textContent = "as of " + formatAgo(updatedMs);
               return;
             }}
             subtitleEl.textContent = snapshotLabel;
@@ -3513,11 +4037,13 @@ def _render_bingo_board_fragment(
     )
     updated_ms = (
         int(float(st.session_state.bingo_last_updated) * 1000)
-        if view_day is None
+        if view_day is None and _bingo_game_is_active(settings=settings)
         else None
     )
     with st.container(key="bingo_board_viewport"):
-        _render_bingo_board_toolbar(show_refresh=view_day is None)
+        _render_bingo_board_toolbar(
+            show_refresh=view_day is None and _bingo_game_is_active(settings=settings),
+        )
         _render_bingo_board_component(
             cells_html=cells_html,
             cols=cols,
@@ -3568,11 +4094,8 @@ def render_bingo_board() -> None:
         return
 
     _maybe_rerun_bingo_app()
-    _consume_bingo_auto_refresh_query()
 
     live_view = st.session_state.get("bingo_view_day") is None
-    if live_view and "bingo_last_updated" not in st.session_state:
-        _touch_bingo_live_updated()
 
     saving = bool(st.session_state.get("bingo_submission_in_progress"))
     spinner = st.spinner("Saving score…") if saving else nullcontext()
@@ -3592,14 +4115,44 @@ def render_bingo_board() -> None:
             st.warning("Bingo settings are not available yet.")
             return
 
+        game_is_active = _bingo_game_is_active(settings=settings)
+        if live_view and game_is_active and "bingo_last_updated" not in st.session_state:
+            _touch_bingo_live_updated()
+
+        if live_view and _bingo_supports_live_refresh(settings=settings):
+            _render_bingo_auto_refresh_trigger()
+
+        scoreboard: BingoScoreboard | None = None
+        final_standings: BingoFinalStandings | None = None
+        if charts and settings.start_time is not None and settings.day_count is not None:
+            try:
+                scoreboard = compute_bingo_scoreboard(
+                    settings=settings,
+                    charts=charts,
+                )
+            except Exception:
+                scoreboard = None
+            completed_for_winner = completed_bingo_days(
+                start_time=settings.start_time,
+                day_count=int(settings.day_count),
+            )
+            if (
+                scoreboard is not None
+                and completed_for_winner >= int(settings.day_count)
+            ):
+                final_standings = compute_bingo_final_standings(
+                    scoreboard=scoreboard,
+                )
+
         _render_bingo_header(
             settings,
-            live_view=live_view,
+            live_view=live_view and _bingo_supports_live_refresh(settings=settings),
             updated_ms=(
                 int(float(st.session_state.bingo_last_updated) * 1000)
-                if live_view
+                if live_view and game_is_active
                 else None
             ),
+            final_standings=final_standings,
         )
 
         if not charts:
@@ -3615,11 +4168,12 @@ def render_bingo_board() -> None:
 
         st.markdown(build_bingo_board_css(), unsafe_allow_html=True)
 
-        try:
-            scoreboard = compute_bingo_scoreboard(settings=settings, charts=charts)
-        except Exception as exc:
-            st.error(f"Failed to load Bingo scoreboard: {exc}")
-            scoreboard = None
+        if scoreboard is None:
+            try:
+                scoreboard = compute_bingo_scoreboard(settings=settings, charts=charts)
+            except Exception as exc:
+                st.error(f"Failed to load Bingo scoreboard: {exc}")
+                scoreboard = None
 
         _render_bingo_board_fragment(
             settings=settings,

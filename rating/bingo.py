@@ -82,6 +82,8 @@ class BingoSquareClaimEvent:
     formed_bingo: bool = False
     formed_four: bool = False
     captured_group: bool = False
+    # (team, delta) ordered: gainer first, then losers by most points lost.
+    point_impacts: tuple[tuple[str, int], ...] = ()
 
     @property
     def is_flip(self) -> bool:
@@ -505,6 +507,84 @@ def _leaders_by_coord_from_charts(
     }
 
 
+def _standings_data_from_maps(
+    totals: dict[tuple[str, str], dict[str, int]],
+    player_bests: dict[tuple[str, str], dict[str, list[int]]],
+) -> dict[tuple[str, str], tuple[dict[str, int], dict[str, list[int]]]]:
+    keys = set(totals) | set(player_bests)
+    empty_totals = {team: 0 for team in TEAM_ORDER}
+    empty_bests = {team: [] for team in TEAM_ORDER}
+    return {
+        key: (
+            totals.get(key, empty_totals),
+            player_bests.get(key, empty_bests),
+        )
+        for key in keys
+    }
+
+
+def bingo_day_for_instant(
+    *,
+    start_time: datetime,
+    day_count: int,
+    moment: datetime,
+) -> int:
+    """1-based competition day containing ``moment``."""
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    if start_time.tzinfo is None:
+        start_time = start_time.replace(tzinfo=timezone.utc)
+    day_count = max(1, int(day_count))
+    if moment < start_time:
+        return 1
+    elapsed_days = int((moment - start_time).total_seconds() // 86400)
+    return max(1, min(day_count, elapsed_days + 1))
+
+
+def compute_claim_point_impacts(
+    *,
+    charts: list[BingoChart],
+    board_width: int,
+    prev_totals: dict[tuple[str, str], dict[str, int]],
+    prev_best_lists: dict[tuple[str, str], dict[str, list[int]]],
+    new_totals: dict[tuple[str, str], dict[str, int]],
+    new_best_lists: dict[tuple[str, str], dict[str, list[int]]],
+    day: int,
+    day_count: int,
+) -> tuple[tuple[str, int], ...]:
+    """Per-team point deltas from a square claim, ordered for display."""
+    prev_scores = score_board_state(
+        charts=charts,
+        standings_data=_standings_data_from_maps(prev_totals, prev_best_lists),
+        board_width=board_width,
+        day=day,
+        day_count=day_count,
+    )
+    new_scores = score_board_state(
+        charts=charts,
+        standings_data=_standings_data_from_maps(new_totals, new_best_lists),
+        board_width=board_width,
+        day=day,
+        day_count=day_count,
+    )
+    deltas: dict[str, int] = {}
+    for team in TEAM_ORDER:
+        delta = int(new_scores[team].points) - int(prev_scores[team].points)
+        if delta != 0:
+            deltas[team] = delta
+
+    team_rank = {team: index for index, team in enumerate(TEAM_ORDER)}
+    gainers = sorted(
+        [(team, delta) for team, delta in deltas.items() if delta > 0],
+        key=lambda item: (-item[1], team_rank.get(item[0], 99)),
+    )
+    losers = sorted(
+        [(team, delta) for team, delta in deltas.items() if delta < 0],
+        key=lambda item: (item[1], team_rank.get(item[0], 99)),
+    )
+    return tuple(gainers + losers)
+
+
 def _run_keys_for_cell(
     runs: list[tuple[str, list[tuple[int, int]], str, str]],
     *,
@@ -544,9 +624,14 @@ def load_bingo_square_claim_feed(
     if start_time is None or limit <= 0:
         return []
 
+    settings = load_bingo_settings(db_url)
     if board_width is None:
-        settings = load_bingo_settings(db_url)
         board_width = int(settings.board_width) if settings is not None else 5
+    day_count = (
+        max(1, int(settings.day_count))
+        if settings is not None and settings.day_count is not None
+        else 1
+    )
 
     board_charts = charts if charts is not None else load_bingo_charts(db_url)
     board_charts = bingo_charts_on_board(board_charts, int(board_width))
@@ -650,6 +735,22 @@ def load_bingo_square_claim_feed(
         if isinstance(created_at, datetime) and created_at.tzinfo is None:
             created_at = created_at.replace(tzinfo=timezone.utc)
 
+        claim_day = bingo_day_for_instant(
+            start_time=start_time,
+            day_count=day_count,
+            moment=created_at,
+        )
+        point_impacts = compute_claim_point_impacts(
+            charts=board_charts,
+            board_width=width,
+            prev_totals=prev_totals,
+            prev_best_lists=prev_best_lists,
+            new_totals=new_totals,
+            new_best_lists=new_best_lists,
+            day=claim_day,
+            day_count=day_count,
+        )
+
         events.append(
             BingoSquareClaimEvent(
                 song=chart.song,
@@ -671,6 +772,7 @@ def load_bingo_square_claim_feed(
                     and new_group_owner == team
                     and prev_group_owner != team
                 ),
+                point_impacts=point_impacts,
             )
         )
 
@@ -1312,6 +1414,115 @@ class BingoScoreboard:
     prospective_day: int | None = None
 
 
+@dataclass(frozen=True)
+class BingoFinalStandings:
+    first: str
+    second: str | None = None
+    third: str | None = None
+
+
+def _bingo_team_day_points(
+    scoreboard: BingoScoreboard,
+    team: str,
+    *,
+    day_index: int,
+) -> int:
+    points = scoreboard.daily_points.get(team, [])
+    if day_index < 0 or day_index >= len(points):
+        return 0
+    value = points[day_index]
+    return 0 if value is None else int(value)
+
+
+def _order_tied_teams_by_daily_points(
+    teams: list[str],
+    *,
+    scoreboard: BingoScoreboard,
+    day_count: int,
+) -> list[str]:
+    """Break ties using final-day points first, then earlier days.
+
+    Teams eliminated on a day are no longer considered on earlier days.
+    Identical points on every day is a true tie (stable TEAM_ORDER fallback).
+    """
+    if len(teams) <= 1:
+        return teams
+
+    remaining = list(teams)
+    for day_index in range(day_count - 1, -1, -1):
+        scores = {
+            team: _bingo_team_day_points(scoreboard, team, day_index=day_index)
+            for team in remaining
+        }
+        max_score = max(scores.values())
+        top_teams = [team for team in remaining if scores[team] == max_score]
+        bottom_teams = [team for team in remaining if scores[team] < max_score]
+
+        if bottom_teams:
+            return (
+                _order_tied_teams_by_daily_points(
+                    top_teams, scoreboard=scoreboard, day_count=day_count
+                )
+                + _order_tied_teams_by_daily_points(
+                    bottom_teams, scoreboard=scoreboard, day_count=day_count
+                )
+            )
+
+        remaining = top_teams
+        if day_index == 0 and len(remaining) > 1:
+            return sorted(remaining, key=lambda team: TEAM_ORDER.index(team))
+
+    return remaining
+
+
+def compute_bingo_final_standings(
+    *,
+    scoreboard: BingoScoreboard,
+) -> BingoFinalStandings | None:
+    """Return 1st/2nd/3rd after all days finish, with daily-point tiebreaks."""
+    day_count = max(1, int(scoreboard.day_count))
+    if int(scoreboard.completed_days) < day_count:
+        return None
+
+    max_total = max(int(scoreboard.totals.get(team, 0)) for team in TEAM_ORDER)
+    if max_total <= 0:
+        return None
+
+    groups: dict[int, list[str]] = {}
+    for team in TEAM_ORDER:
+        total = int(scoreboard.totals.get(team, 0))
+        groups.setdefault(total, []).append(team)
+
+    ordered: list[str] = []
+    for total in sorted(groups.keys(), reverse=True):
+        group = groups[total]
+        ordered.extend(
+            _order_tied_teams_by_daily_points(
+                group,
+                scoreboard=scoreboard,
+                day_count=day_count,
+            )
+        )
+
+    if not ordered:
+        return None
+
+    return BingoFinalStandings(
+        first=ordered[0],
+        second=ordered[1] if len(ordered) > 1 else None,
+        third=ordered[2] if len(ordered) > 2 else None,
+    )
+
+
+def compute_bingo_winner(
+    *,
+    scoreboard: BingoScoreboard,
+) -> str | None:
+    """Return the winning team after all competition days finish."""
+    standings = compute_bingo_final_standings(scoreboard=scoreboard)
+    return standings.first if standings else None
+
+
 def compute_bingo_scoreboard(
     *,
     settings: BingoSettings,
@@ -1383,6 +1594,7 @@ def compute_bingo_scoreboard(
         totals=totals,
         prospective_day=in_progress,
     )
+
 
 
 def seed_bingo_test_scores(

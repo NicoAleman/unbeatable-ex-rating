@@ -47,12 +47,17 @@ def format_activity_rating_delta(prev_rating: float, new_rating: float) -> str |
 def format_difficulty_display_name(difficulty: str) -> str:
     stripped = difficulty.strip()
     mapped = DIFFICULTY_DISPLAY_NAMES.get(stripped)
-    if mapped is not None:
-        return mapped
-    for internal, display in DIFFICULTY_DISPLAY_NAMES.items():
-        if stripped.casefold() == internal.casefold():
-            return display
-    return stripped
+    if mapped is None:
+        for internal, display in DIFFICULTY_DISPLAY_NAMES.items():
+            if stripped.casefold() == internal.casefold():
+                mapped = display
+                break
+    display = mapped if mapped is not None else stripped
+    if display.casefold() == "unbeatable":
+        return "UNBEATABLE"
+    if not display:
+        return display
+    return display[0].upper() + display[1:].lower()
 
 
 def format_song_display_name(raw_name: str, max_scores_path=None) -> str:
