@@ -343,6 +343,17 @@ def _format_player_max_score_label(chart: BingoChart, score: int) -> str:
 
 
 def _player_block_html(*, team: str, score: int) -> str:
+    if score <= 0:
+        return (
+            '<div class="bingo-cell-leader bingo-cell-leader--not-played">'
+            '<div class="bingo-cell-leader-team bingo-cell-leader-team--spacer" aria-hidden="true">'
+            "Personal Best"
+            "</div>"
+            '<div class="bingo-cell-leader-score">'
+            '<span class="bingo-cell-not-played">Not Played</span>'
+            "</div>"
+            "</div>"
+        )
     color = TEAM_TEXT_COLORS.get(team, "#eaeaea")
     score_text = html.escape(format_leader_score(score))
     return (
@@ -1432,15 +1443,30 @@ def _render_cell_html(
     line_html = _bingo_line_svg_html(bingo_segments or [])
     aria_label = html.escape(f"View leaderboard for {chart.display_name}")
     if view_player is not None:
+        player_score_val = int(player_score or 0)
+        not_played = player_score_val <= 0
+        player_view_class = "bingo-cell-view bingo-cell-player-view"
+        if not_played:
+            player_view_class += " bingo-cell-player-view--not-played"
+        player_bot_html = ""
+        if not not_played:
+            player_bot_html = (
+                f'<div class="bingo-cell-bot">'
+                f"{_player_footer_html(player_max_score_label or '— Max Score')}"
+                "</div>"
+            )
+        body_class = "bingo-cell-body"
+        if not_played:
+            body_class += " bingo-cell-body--player-not-played"
         body_html = (
-            '<div class="bingo-cell-body">'
+            f'<div class="{body_class}">'
             '<div class="bingo-cell-view bingo-cell-team-view">'
             f'<div class="bingo-cell-mid">{_leader_block_html(standing)}</div>'
             f'<div class="bingo-cell-bot">{_trailers_block_html(standing)}</div>'
             "</div>"
-            '<div class="bingo-cell-view bingo-cell-player-view">'
-            f'<div class="bingo-cell-mid">{_player_block_html(team=view_player.team, score=int(player_score or 0))}</div>'
-            f'<div class="bingo-cell-bot">{_player_footer_html(player_max_score_label or "— Max Score")}</div>'
+            f'<div class="{player_view_class}">'
+            f'<div class="bingo-cell-mid">{_player_block_html(team=view_player.team, score=player_score_val)}</div>'
+            f"{player_bot_html}"
             "</div>"
             "</div>"
         )
@@ -3575,6 +3601,148 @@ def _render_bingo_chart_completions_table_html(
     )
 
 
+def _build_bingo_completions_overlay_document(*, table_html: str) -> str:
+    return f"""<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+html, body {{
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    background: transparent;
+    font-family: "Source Sans Pro", "Segoe UI", sans-serif;
+}}
+{_BINGO_CHART_MODAL_ANIMATION_CSS}
+{_BINGO_CHART_MODAL_SCROLLBAR_CSS}
+.bingo-chart-modal-overlay {{
+    position: fixed;
+    inset: 0;
+    z-index: 1;
+    align-items: center;
+    justify-content: center;
+    padding: 1.5rem;
+    box-sizing: border-box;
+}}
+.bingo-chart-modal-backdrop {{
+    position: absolute;
+    inset: 0;
+    border: none;
+    background: rgba(4, 8, 20, 0.72);
+    cursor: pointer;
+}}
+.bingo-chart-modal-panel {{
+    position: relative;
+    z-index: 1;
+    width: min(100%, 960px);
+    max-height: min(80vh, 760px);
+    overflow: auto;
+    background: #10162d;
+    border: 1px solid rgba(234, 234, 234, 0.18);
+    border-radius: 0.85rem;
+    box-shadow: 0 24px 64px rgba(0, 0, 0, 0.45);
+    padding: 1.25rem 1.25rem 1.1rem;
+    box-sizing: border-box;
+}}
+.bingo-chart-modal-close {{
+    position: absolute;
+    top: 0.65rem;
+    right: 0.75rem;
+    border: none;
+    background: transparent;
+    color: rgba(234, 234, 234, 0.72);
+    font-size: 1.65rem;
+    line-height: 1;
+    cursor: pointer;
+    padding: 0.15rem 0.35rem;
+}}
+.bingo-chart-modal-close:hover {{
+    color: #ffffff;
+}}
+.bingo-chart-modal-title {{
+    font-size: 1.35rem;
+    font-weight: 800;
+    color: #f5f5f5;
+    margin: 0 2rem 0.2rem 0;
+    line-height: 1.25;
+}}
+.bingo-chart-modal-table-wrap {{
+    overflow-x: auto;
+}}
+.bingo-chart-modal-table {{
+    width: 100%;
+    border-collapse: collapse;
+    color: #eaeaea;
+}}
+.bingo-chart-modal-table th,
+.bingo-chart-modal-table td {{
+    padding: 0.55rem 0.75rem;
+    border-bottom: 1px solid rgba(234, 234, 234, 0.1);
+    text-align: left;
+    vertical-align: middle;
+}}
+.bingo-chart-modal-table th {{
+    font-size: 0.82rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: rgba(234, 234, 234, 0.62);
+}}
+.bingo-chart-modal-player {{
+    font-weight: 700;
+}}
+.bingo-chart-modal-score {{
+    text-align: right;
+    font-weight: 800;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}}
+.bingo-chart-modal-table tbody tr.bingo-chart-modal-row--highlighted td {{
+    background: rgba(110, 176, 255, 0.12);
+}}
+.bingo-chart-modal-empty {{
+    color: rgba(234, 234, 234, 0.72);
+    font-size: 0.95rem;
+    padding: 0.5rem 0;
+}}
+</style>
+</head>
+<body>
+<div id="bingo-chart-completions-modal" class="bingo-chart-modal-overlay bingo-chart-completions-modal is-open" aria-hidden="false">
+  <button type="button" class="bingo-chart-modal-backdrop" aria-label="Close chart completions"></button>
+  <div class="bingo-chart-modal-panel" role="dialog" aria-modal="true" aria-labelledby="bingo-chart-completions-title">
+    <button type="button" class="bingo-chart-modal-close" aria-label="Close">&times;</button>
+    <div id="bingo-chart-completions-title" class="bingo-chart-modal-title">Chart Completions</div>
+    <div class="bingo-chart-modal-body">{table_html}</div>
+  </div>
+</div>
+<script>
+(function () {{
+  function requestClose() {{
+    try {{
+      const host = window.parent;
+      if (host && typeof host.__bingoCloseCompletionsOverlay === "function") {{
+        host.__bingoCloseCompletionsOverlay();
+        return;
+      }}
+    }} catch (error) {{}}
+    window.parent.postMessage("bingo-completions-close", "*");
+  }}
+  document.querySelector(".bingo-chart-modal-backdrop").addEventListener("click", requestClose);
+  document.querySelector(".bingo-chart-modal-close").addEventListener("click", requestClose);
+  document.addEventListener("keydown", function (event) {{
+    if (event.key === "Escape") {{
+      requestClose();
+    }}
+  }});
+  document.querySelector(".bingo-chart-modal-close").focus();
+}})();
+</script>
+</body>
+</html>"""
+
+
 def _render_bingo_chart_completions(
     *,
     charts: list[BingoChart],
@@ -3609,7 +3777,8 @@ def _render_bingo_chart_completions(
         total_charts=total_charts,
         highlight_player_id=highlight_player_id,
     )
-    table_html_json = json.dumps(table_html).replace("</", "<\\/")
+    overlay_doc = _build_bingo_completions_overlay_document(table_html=table_html)
+    overlay_doc_json = json.dumps(overlay_doc).replace("</", "<\\/")
 
     st.markdown(
         """
@@ -3674,69 +3843,146 @@ def _render_bingo_chart_completions(
             (function () {{
               const parentWin = window.parent;
               const parentDoc = parentWin.document;
-              const tableHtml = {table_html_json};
+              const overlayDoc = {overlay_doc_json};
 
-              function ensureModal() {{
-                let modal = parentDoc.getElementById("bingo-chart-completions-modal");
-                if (modal) {{
-                  return modal;
+              parentWin.__bingoCloseCompletionsOverlay = function () {{
+                const frame = parentDoc.getElementById("bingo-completions-overlay-frame");
+                if (frame) {{
+                  frame.style.display = "none";
+                  frame.setAttribute("aria-hidden", "true");
                 }}
-                modal = parentDoc.createElement("div");
-                modal.id = "bingo-chart-completions-modal";
-                modal.className = "bingo-chart-modal-overlay bingo-chart-completions-modal";
-                modal.setAttribute("aria-hidden", "true");
-                modal.innerHTML =
-                  '<button type="button" class="bingo-chart-modal-backdrop" aria-label="Close chart completions"></button>' +
-                  '<div class="bingo-chart-modal-panel" role="dialog" aria-modal="true" aria-labelledby="bingo-chart-completions-title">' +
-                  '<button type="button" class="bingo-chart-modal-close" aria-label="Close">&times;</button>' +
-                  '<div id="bingo-chart-completions-title" class="bingo-chart-modal-title">Chart Completions</div>' +
-                  '<div class="bingo-chart-modal-body"></div>' +
-                  "</div>";
-                parentDoc.body.appendChild(modal);
-                return modal;
-              }}
-
-              function closeModal(modal) {{
-                modal.classList.remove("is-open");
-                modal.classList.remove("is-closing");
-                modal.setAttribute("aria-hidden", "true");
-              }}
-
-              function openModal() {{
-                const modal = ensureModal();
-                modal.querySelector(".bingo-chart-modal-body").innerHTML = tableHtml;
-                modal.classList.add("is-open");
-                modal.setAttribute("aria-hidden", "false");
-                modal.querySelector(".bingo-chart-modal-close").focus();
-              }}
-
-              if (!parentWin.__bingoCompletionsModalListeners) {{
-                parentWin.__bingoCompletionsModalListeners = true;
-                parentDoc.addEventListener("click", (event) => {{
-                  const modal = parentDoc.getElementById("bingo-chart-completions-modal");
-                  if (!modal) {{
+                if (parentWin.__bingoCompletionsIframeObserver) {{
+                  parentWin.__bingoCompletionsIframeObserver.disconnect();
+                  parentWin.__bingoCompletionsIframeObserver = null;
+                }}
+                parentDoc.querySelectorAll("iframe").forEach(function (node) {{
+                  if (node.id === "bingo-completions-overlay-frame") {{
                     return;
                   }}
-                  if (event.target.closest("#bingo-chart-completions-modal .bingo-chart-modal-backdrop")
-                    || event.target.closest("#bingo-chart-completions-modal .bingo-chart-modal-close")) {{
-                    closeModal(modal);
+                  if (node.dataset.bingoCompletionsPointerBlocked === "1") {{
+                    node.style.pointerEvents = node.dataset.bingoCompletionsPrevPointerEvents || "";
+                    delete node.dataset.bingoCompletionsPointerBlocked;
+                    delete node.dataset.bingoCompletionsPrevPointerEvents;
                   }}
-                }}, true);
-                parentDoc.addEventListener("keydown", (event) => {{
-                  const modal = parentDoc.getElementById("bingo-chart-completions-modal");
-                  if (!modal || !modal.classList.contains("is-open")) {{
+                }});
+                if (parentWin.__bingoCompletionsEscapeListener) {{
+                  parentDoc.removeEventListener(
+                    "keydown",
+                    parentWin.__bingoCompletionsEscapeListener,
+                    true
+                  );
+                  parentWin.__bingoCompletionsEscapeListener = null;
+                }}
+              }};
+
+              parentWin.__bingoBlockCompletionsOverlayInterference = function () {{
+                if (parentWin.__bingoCompletionsOverlayBusy) {{
+                  return;
+                }}
+                parentWin.__bingoCompletionsOverlayBusy = true;
+                try {{
+                  parentDoc.querySelectorAll("iframe").forEach(function (node) {{
+                    if (node.id === "bingo-completions-overlay-frame") {{
+                      return;
+                    }}
+                    if (node.dataset.bingoCompletionsPointerBlocked === "1") {{
+                      return;
+                    }}
+                    node.dataset.bingoCompletionsPointerBlocked = "1";
+                    node.dataset.bingoCompletionsPrevPointerEvents = node.style.pointerEvents || "";
+                    node.style.pointerEvents = "none";
+                  }});
+                  const frame = parentDoc.getElementById("bingo-completions-overlay-frame");
+                  if (frame && parentDoc.body.lastElementChild !== frame) {{
+                    parentDoc.body.appendChild(frame);
+                  }}
+                  if (frame) {{
+                    frame.style.display = "block";
+                    frame.style.pointerEvents = "auto";
+                    frame.style.zIndex = "2147483647";
+                  }}
+                }} finally {{
+                  parentWin.__bingoCompletionsOverlayBusy = false;
+                }}
+              }};
+
+              parentWin.__bingoOpenCompletionsOverlay = function (nextOverlayDoc) {{
+                const staleModal = parentDoc.getElementById("bingo-chart-completions-modal");
+                if (staleModal) {{
+                  staleModal.remove();
+                }}
+                let frame = parentDoc.getElementById("bingo-completions-overlay-frame");
+                if (!frame) {{
+                  frame = parentDoc.createElement("iframe");
+                  frame.id = "bingo-completions-overlay-frame";
+                  frame.setAttribute("title", "Chart Completions");
+                  frame.setAttribute("aria-hidden", "true");
+                  frame.style.cssText =
+                    "position:fixed;inset:0;width:100%;height:100%;border:none;z-index:2147483647;background:transparent;display:none;pointer-events:auto;";
+                }}
+                parentDoc.body.appendChild(frame);
+                frame.srcdoc = nextOverlayDoc;
+                frame.style.display = "block";
+                frame.style.pointerEvents = "auto";
+                frame.setAttribute("aria-hidden", "false");
+                parentWin.__bingoBlockCompletionsOverlayInterference();
+                if (parentWin.__bingoCompletionsIframeObserver) {{
+                  parentWin.__bingoCompletionsIframeObserver.disconnect();
+                }}
+                parentWin.__bingoCompletionsIframeObserver = new MutationObserver(function () {{
+                  parentWin.__bingoBlockCompletionsOverlayInterference();
+                }});
+                parentWin.__bingoCompletionsIframeObserver.observe(parentDoc.body, {{
+                  childList: true,
+                  subtree: true,
+                }});
+                if (parentWin.__bingoCompletionsEscapeListener) {{
+                  parentDoc.removeEventListener(
+                    "keydown",
+                    parentWin.__bingoCompletionsEscapeListener,
+                    true
+                  );
+                }}
+                parentWin.__bingoCompletionsEscapeListener = function (event) {{
+                  if (event.key !== "Escape") {{
                     return;
                   }}
-                  if (event.key === "Escape") {{
-                    closeModal(modal);
+                  const activeFrame = parentDoc.getElementById("bingo-completions-overlay-frame");
+                  if (!activeFrame || activeFrame.style.display === "none") {{
+                    return;
                   }}
-                }}, true);
+                  parentWin.__bingoCloseCompletionsOverlay();
+                }};
+                parentDoc.addEventListener(
+                  "keydown",
+                  parentWin.__bingoCompletionsEscapeListener,
+                  true
+                );
+              }};
+
+              if (parentWin.__bingoCompletionsMessageListener) {{
+                parentWin.removeEventListener("message", parentWin.__bingoCompletionsMessageListener);
               }}
+              parentWin.__bingoCompletionsMessageListener = function (event) {{
+                if (event.data !== "bingo-completions-close") {{
+                  return;
+                }}
+                const frame = parentDoc.getElementById("bingo-completions-overlay-frame");
+                if (!frame || frame.style.display === "none") {{
+                  return;
+                }}
+                if (event.source && frame.contentWindow && event.source !== frame.contentWindow) {{
+                  return;
+                }}
+                parentWin.__bingoCloseCompletionsOverlay();
+              }};
+              parentWin.addEventListener("message", parentWin.__bingoCompletionsMessageListener);
 
               const openBtn = document.getElementById("bingo-completions-open");
-              if (openBtn && openBtn.dataset.completionsReady !== "1") {{
-                openBtn.dataset.completionsReady = "1";
-                openBtn.addEventListener("click", openModal);
+              if (openBtn) {{
+                openBtn.onclick = function () {{
+                  parentWin.__bingoOpenCompletionsOverlay(overlayDoc);
+                }};
               }}
             }})();
             </script>
@@ -4442,11 +4688,15 @@ def _bingo_board_component_css(*, cols: int, rows: int) -> str:
     .bingo-board-root.has-player-data:not(.is-player-board) .bingo-cell-player-view {{
         opacity: 0;
         pointer-events: none;
+        position: absolute;
+        inset: 0;
+        z-index: 0;
     }}
     .bingo-board-root.has-player-data:not(.is-detailed):not(.is-player-board) .bingo-cell {{
         grid-template-rows: 1fr 0fr;
     }}
     .bingo-board-root.has-player-data:not(.is-detailed):not(.is-player-board) .bingo-cell-body {{
+        position: relative;
         overflow: hidden;
         min-height: 0;
     }}
@@ -4487,6 +4737,8 @@ def _bingo_board_component_css(*, cols: int, rows: int) -> str:
         flex-direction: column;
     }}
     .bingo-board-root.has-player-data:not(.is-detailed):not(.is-player-board) .bingo-cell:hover .bingo-cell-team-view {{
+        position: relative;
+        z-index: 1;
         display: flex;
         flex-direction: column;
         flex: 1 1 auto;
@@ -4579,6 +4831,28 @@ def _bingo_board_component_css(*, cols: int, rows: int) -> str:
     }}
     .bingo-cell-player-score {{
         color: rgba(245, 245, 245, 0.96) !important;
+    }}
+    .bingo-cell-leader--not-played {{
+        min-height: auto;
+    }}
+    .bingo-cell-leader-team--spacer {{
+        visibility: hidden;
+    }}
+    .bingo-cell-not-played {{
+        display: inline-block;
+        color: #ff5c67;
+        background: #000000;
+        font-size: 1.05rem;
+        font-weight: 800;
+        line-height: 1.2;
+        padding: 0.22rem 0.55rem;
+        border-radius: 0.18rem;
+    }}
+    .bingo-board-root.is-player-board.has-player-data .bingo-cell-body--player-not-played {{
+        grid-template-rows: minmax(4.25rem, 1fr);
+    }}
+    .bingo-board-root.is-player-board.has-player-data .bingo-cell-player-view--not-played {{
+        grid-template-rows: minmax(4.25rem, 1fr);
     }}
     .bingo-cell-player-view .bingo-cell-bot {{
         justify-content: center;
