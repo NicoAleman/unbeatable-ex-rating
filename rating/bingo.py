@@ -1230,14 +1230,14 @@ def bingo_day_end(start_time: datetime, day: int) -> datetime:
 def bingo_day_multiplier(day: int, day_count: int) -> int:
     """Point multiplier for a competition day.
 
-    Day 1: 0x, day 2: 1x, days 3-4: 2x, remaining pre-final days: 3x, final day: 10x.
+    Day 1: 0x, day 2: 1x, days 3-4: 2x, remaining pre-final days: 3x, final day: 5x.
     """
     day = int(day)
     day_count = max(1, int(day_count))
     if day < 1 or day > day_count:
         return 0
     if day == day_count:
-        return 10
+        return 5
     if day >= 5:
         return 3
     if day >= 3:
