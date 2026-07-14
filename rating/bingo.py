@@ -46,10 +46,10 @@ class BingoChart:
 @dataclass(frozen=True)
 class BingoCellStanding:
     chart: BingoChart
-    team_totals: dict[str, int]
+    team_totals: dict[str, float]
     leader: str | None
-    leader_score: int
-    trailers: list[tuple[str, int]]
+    leader_score: float
+    trailers: list[tuple[str, float]]
 
 
 @dataclass(frozen=True)
@@ -1160,23 +1160,25 @@ def process_bingo_mod_submission(payload: dict[str, object]) -> tuple[bool, str]
     )
 
 
-def _team_tiebreak_key(team: str, player_bests: list[int]) -> tuple:
+def _team_tiebreak_key(team: str, player_bests: list[float]) -> tuple:
     """Higher is better: sorted individual scores desc, then Eve > Grace > Rest."""
-    scores_desc = tuple(sorted((int(score) for score in player_bests), reverse=True))
+    scores_desc = tuple(sorted((float(score) for score in player_bests), reverse=True))
     priority = len(TEAM_ORDER) - TEAM_ORDER.index(team)
     return (scores_desc, priority)
 
 
 def pick_leading_team(
-    team_totals: dict[str, int],
-    player_bests_by_team: dict[str, list[int]],
+    team_totals: dict[str, float],
+    player_bests_by_team: dict[str, list[float]],
 ) -> str | None:
     """Pick the leading team, breaking total ties by top individual scores."""
-    max_total = max((int(total) for total in team_totals.values()), default=0)
+    max_total = max((float(total) for total in team_totals.values()), default=0.0)
     if max_total <= 0:
         return None
 
-    candidates = [team for team in TEAM_ORDER if int(team_totals.get(team, 0)) == max_total]
+    candidates = [
+        team for team in TEAM_ORDER if float(team_totals.get(team, 0.0)) == max_total
+    ]
     if len(candidates) == 1:
         return candidates[0]
 
@@ -1190,18 +1192,18 @@ def pick_leading_team(
 
 def build_cell_standing(
     chart: BingoChart,
-    team_totals_by_chart: dict[tuple[str, str], dict[str, int]],
-    player_bests_by_chart: dict[tuple[str, str], dict[str, list[int]]] | None = None,
+    team_totals_by_chart: dict[tuple[str, str], dict[str, float]],
+    player_bests_by_chart: dict[tuple[str, str], dict[str, list[float]]] | None = None,
 ) -> BingoCellStanding:
     raw = team_totals_by_chart.get((chart.song, chart.difficulty), {})
-    team_totals = {team: int(raw.get(team, 0)) for team in TEAM_ORDER}
-    max_score = max(team_totals.values()) if team_totals else 0
+    team_totals = {team: float(raw.get(team, 0.0)) for team in TEAM_ORDER}
+    max_score = max(team_totals.values()) if team_totals else 0.0
     if max_score <= 0:
         return BingoCellStanding(
             chart=chart,
             team_totals=team_totals,
             leader=None,
-            leader_score=0,
+            leader_score=0.0,
             trailers=[],
         )
 
@@ -1209,7 +1211,7 @@ def build_cell_standing(
     if player_bests_by_chart is not None:
         bests = player_bests_by_chart.get((chart.song, chart.difficulty), {})
     leader = pick_leading_team(team_totals, bests)
-    trailers: list[tuple[str, int]] = []
+    trailers: list[tuple[str, float]] = []
     if leader is not None:
         for team in TEAM_ORDER:
             if team == leader:
@@ -1228,6 +1230,32 @@ def build_cell_standing(
 def format_leader_score(score: int) -> str:
     """17,032,277 -> 17,032,277"""
     return f"{int(score):,}"
+
+
+def format_bingo_points(amount: float | int, *, signed: bool = False) -> str:
+    """Format v2 chart scoring points for display (< 10 shows one decimal)."""
+    value = float(amount)
+    abs_value = abs(value)
+    body = f"{abs_value:.1f}" if abs_value < 10 else str(int(round(abs_value)))
+    if not signed:
+        return f"-{body}" if value < 0 else body
+    if value > 0:
+        return f"+{body}"
+    if value < 0:
+        return f"-{body}"
+    return body
+
+
+def format_bingo_signed_delta(amount: float | int) -> str:
+    """Upscore point-change deltas: decimals only for positive values below 10."""
+    value = float(amount)
+    if value <= 0:
+        if value < 0:
+            return str(int(round(value)))
+        return "0"
+    if value < 10:
+        return f"+{value:.1f}"
+    return f"+{int(round(value))}"
 
 
 def bingo_chart_max_score(song: str, difficulty: str) -> int | None:

@@ -14,15 +14,15 @@ EX_ACCURACY_FLOOR = 70.0
 
 @dataclass(frozen=True)
 class ChartPlayerPointBreakdown:
-    accuracy_points: int
+    accuracy_points: float
     placement_bonus: int
     rank: int
 
 
 @dataclass(frozen=True)
 class ChartClaimScoring:
-    team_totals: dict[str, int]
-    player_points_by_team: dict[str, list[int]]
+    team_totals: dict[str, float]
+    player_points_by_team: dict[str, list[float]]
 
 
 def bingo_scoring_version() -> str:
@@ -84,8 +84,8 @@ def _placement_ranks_by_score(
     return _competition_ranks(scores)
 
 
-def _floored_accuracy_points() -> int:
-    return int(round(accuracy_formula_points(EX_ACCURACY_FLOOR)))
+def _floored_accuracy_points() -> float:
+    return accuracy_formula_points(EX_ACCURACY_FLOOR)
 
 
 def _player_accuracy_points(*, score: int, song: str, difficulty: str) -> float:
@@ -118,7 +118,7 @@ def compute_chart_player_point_breakdowns(
     ranks = _placement_ranks_by_score(players)
     return {
         player_id: ChartPlayerPointBreakdown(
-            accuracy_points=int(round(accuracy_points)),
+            accuracy_points=accuracy_points,
             placement_bonus=placement_bonus_points(ranks[player_id]),
             rank=ranks[player_id],
         )
@@ -157,25 +157,25 @@ def compute_chart_claim_scoring_v2(
         )
 
     ranks = _placement_ranks_by_score(players)
-    team_totals = {team: 0 for team in TEAM_ORDER}
-    player_points_by_team: dict[str, list[int]] = {team: [] for team in TEAM_ORDER}
+    team_totals: dict[str, float] = {team: 0.0 for team in TEAM_ORDER}
+    player_points_by_team: dict[str, list[float]] = {team: [] for team in TEAM_ORDER}
 
     for player_id, accuracy_points in accuracy_by_player.items():
         team = team_by_player[player_id]
         rank = ranks[player_id]
-        player_total = int(round(accuracy_points + placement_bonus_points(rank)))
+        player_total = accuracy_points + float(placement_bonus_points(rank))
         if team not in team_totals:
-            team_totals[team] = 0
+            team_totals[team] = 0.0
             player_points_by_team[team] = []
         team_totals[team] += player_total
         player_points_by_team[team].append(player_total)
 
     for team in TEAM_ORDER:
-        team_totals.setdefault(team, 0)
+        team_totals.setdefault(team, 0.0)
         player_points_by_team.setdefault(team, [])
 
     return ChartClaimScoring(
-        team_totals={team: int(team_totals.get(team, 0)) for team in TEAM_ORDER},
+        team_totals={team: float(team_totals.get(team, 0.0)) for team in TEAM_ORDER},
         player_points_by_team=player_points_by_team,
     )
 
@@ -184,14 +184,14 @@ def compute_chart_claim_scoring_v1(
     players: dict[str, tuple[str, int]],
 ) -> ChartClaimScoring:
     """Legacy scoring: team total is the sum of member raw chart scores."""
-    player_points_by_team: dict[str, list[int]] = {team: [] for team in TEAM_ORDER}
+    player_points_by_team: dict[str, list[float]] = {team: [] for team in TEAM_ORDER}
     for _player_id, (team, score) in players.items():
         if team not in player_points_by_team:
             player_points_by_team[team] = []
-        player_points_by_team[team].append(int(score))
+        player_points_by_team[team].append(float(int(score)))
 
     team_totals = {
-        team: int(sum(player_points_by_team.get(team, []))) for team in TEAM_ORDER
+        team: float(sum(player_points_by_team.get(team, []))) for team in TEAM_ORDER
     }
     for team in TEAM_ORDER:
         player_points_by_team.setdefault(team, [])

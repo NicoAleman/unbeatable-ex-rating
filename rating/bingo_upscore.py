@@ -21,16 +21,16 @@ TEAM_ORDER = ("Eve", "Grace", "Rest")
 class UpscorePlayerDelta:
     player_id: str
     team: str
-    before_total: int
-    after_total: int
-    before_accuracy: int
-    after_accuracy: int
+    before_total: float
+    after_total: float
+    before_accuracy: float
+    after_accuracy: float
     before_placement: int
     after_placement: int
 
     @property
-    def total_delta(self) -> int:
-        return int(self.after_total - self.before_total)
+    def total_delta(self) -> float:
+        return self.after_total - self.before_total
 
 
 @dataclass(frozen=True)
@@ -38,7 +38,7 @@ class UpscoreScenarioResult:
     target_ex_accuracy: float
     required_score: int
     target_player: UpscorePlayerDelta
-    team_deltas: dict[str, int]
+    team_deltas: dict[str, float]
     player_deltas: dict[str, UpscorePlayerDelta]
 
 
@@ -63,14 +63,14 @@ def _player_totals_from_breakdowns(
     result: dict[str, UpscorePlayerDelta] = {}
     for player_id, breakdown in breakdowns.items():
         team = players[player_id][0]
-        total = int(breakdown.accuracy_points + breakdown.placement_bonus)
+        total = breakdown.accuracy_points + float(breakdown.placement_bonus)
         result[player_id] = UpscorePlayerDelta(
             player_id=player_id,
             team=team,
             before_total=total,
             after_total=total,
-            before_accuracy=int(breakdown.accuracy_points),
-            after_accuracy=int(breakdown.accuracy_points),
+            before_accuracy=breakdown.accuracy_points,
+            after_accuracy=breakdown.accuracy_points,
             before_placement=int(breakdown.placement_bonus),
             after_placement=int(breakdown.placement_bonus),
         )
@@ -135,22 +135,22 @@ def compute_upscore_scenario(
     for player_id in players:
         before = before_breakdowns[player_id]
         after = after_breakdowns[player_id]
-        before_total = int(before.accuracy_points + before.placement_bonus)
-        after_total = int(after.accuracy_points + after.placement_bonus)
+        before_total = before.accuracy_points + float(before.placement_bonus)
+        after_total = after.accuracy_points + float(after.placement_bonus)
         player_deltas[player_id] = UpscorePlayerDelta(
             player_id=player_id,
             team=players[player_id][0],
             before_total=before_total,
             after_total=after_total,
-            before_accuracy=int(before.accuracy_points),
-            after_accuracy=int(after.accuracy_points),
+            before_accuracy=before.accuracy_points,
+            after_accuracy=after.accuracy_points,
             before_placement=int(before.placement_bonus),
             after_placement=int(after.placement_bonus),
         )
 
     team_deltas = {
-        team: int(after_claim.team_totals.get(team, 0))
-        - int(before_claim.team_totals.get(team, 0))
+        team: float(after_claim.team_totals.get(team, 0.0))
+        - float(before_claim.team_totals.get(team, 0.0))
         for team in TEAM_ORDER
     }
 

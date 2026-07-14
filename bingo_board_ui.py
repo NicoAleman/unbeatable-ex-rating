@@ -33,6 +33,7 @@ from rating.bingo import (
     compute_bingo_final_standings,
     find_bingo_runs,
     format_leader_score,
+    format_bingo_points,
     format_score_diff,
     group_claim_owners,
     bingo_chart_max_score,
@@ -1385,7 +1386,10 @@ def _leader_block_html(standing: BingoCellStanding) -> str:
 
     color = TEAM_TEXT_COLORS.get(standing.leader, "#eaeaea")
     team_text = f"Team {html.escape(_team_label(standing.leader))}"
-    score_text = html.escape(format_leader_score(standing.leader_score))
+    if bingo_scoring_version() == "v2":
+        score_text = html.escape(format_bingo_points(standing.leader_score))
+    else:
+        score_text = html.escape(format_leader_score(int(standing.leader_score)))
     return (
         '<div class="bingo-cell-leader">'
         f'<div class="bingo-cell-leader-team" style="color:{color};">{team_text}</div>'
@@ -1396,19 +1400,23 @@ def _leader_block_html(standing: BingoCellStanding) -> str:
 
 def _trailers_block_html(standing: BingoCellStanding) -> str:
     if standing.leader is None and standing.leader_score <= 0:
-        trailers: list[tuple[str, int]] = []
+        trailers: list[tuple[str, float]] = []
     else:
         trailers = list(standing.trailers[:2])
 
     while len(trailers) < 2:
-        trailers.append(("", 0))
+        trailers.append(("", 0.0))
 
+    use_v2_points = bingo_scoring_version() == "v2"
     parts: list[str] = []
     for index, (team, diff) in enumerate(trailers):
         split_class = " bingo-cell-trailer-split" if index else ""
         if team:
             team_color = TEAM_TEXT_COLORS.get(team, "#eaeaea")
-            label = html.escape(format_score_diff(diff))
+            if use_v2_points:
+                label = html.escape(format_bingo_points(-float(diff)))
+            else:
+                label = html.escape(format_score_diff(int(diff)))
         else:
             team_color = "transparent"
             label = "&nbsp;"
@@ -5923,7 +5931,7 @@ _BINGO_UPSCORE_CALCULATOR_JS = r"""
           }
 
           function flooredAccuracyPoints(floor) {
-            return Math.round(accuracyFormulaPoints(floor, floor));
+            return accuracyFormulaPoints(floor, floor);
           }
 
           function playerAccuracyPoints(score, maxScore, floor) {
@@ -5966,7 +5974,7 @@ _BINGO_UPSCORE_CALCULATOR_JS = r"""
             const ranks = placementRanksByScore(players);
             const breakdowns = {};
             for (const player of players) {
-              const accuracy = Math.round(playerAccuracyPoints(player.score, maxScore, floor));
+              const accuracy = playerAccuracyPoints(player.score, maxScore, floor);
               const placement = placementBonus(ranks[player.player_id]);
               breakdowns[player.player_id] = {
                 accuracy,
@@ -5997,10 +6005,38 @@ _BINGO_UPSCORE_CALCULATOR_JS = r"""
             return Math.floor((clamped / 100) * maxScore);
           }
 
+          function minimumTargetPctForScore(maxScore, score) {
+            const targetScore = Math.max(0, Math.floor(Number(score)));
+            if (maxScore <= 0 || targetScore <= 0) {
+              return 0;
+            }
+            let pct = Math.ceil((targetScore / maxScore) * 10000) / 100;
+            while (requiredScoreForPercent(maxScore, pct) < targetScore && pct < 100) {
+              pct = Math.round((pct + 0.01) * 100) / 100;
+            }
+            return Math.min(pct, 100);
+          }
+
+          function formatBingoPoints(value, signed) {
+            const num = Number(value);
+            const absVal = Math.abs(num);
+            const body = absVal < 10 ? absVal.toFixed(1) : String(Math.round(absVal));
+            if (!signed) {
+              return num < 0 ? "-" + body : body;
+            }
+            if (num > 0) return "+" + body;
+            if (num < 0) return "-" + body;
+            return body;
+          }
+
           function signedDelta(value) {
-            const rounded = Math.round(Number(value));
-            if (rounded > 0) return "+" + rounded;
-            return String(rounded);
+            const num = Number(value);
+            if (num <= 0) {
+              if (num < 0) return String(Math.round(num));
+              return "0";
+            }
+            if (num < 10) return "+" + num.toFixed(1);
+            return "+" + String(Math.round(num));
           }
 
           function otherTeamsMaxTotal(totals, team) {
@@ -6050,7 +6086,7 @@ _BINGO_UPSCORE_CALCULATOR_JS = r"""
                 lo = mid + 1;
               }
             }
-            return exAccuracyForScore(bestScore, maxScore);
+            return minimumTargetPctForScore(maxScore, bestScore);
           }
 
           function updateLeadMarker() {
@@ -6252,7 +6288,7 @@ _BINGO_UPSCORE_CALCULATOR_JS = r"""
                 + '<td class="bingo-upscore-change-arrow" style="background:' + rowBg + ';">→</td>'
                 + '<td class="bingo-upscore-change-total-cell" style="background:' + rowBg + ';">'
                 + '<span class="bingo-upscore-change-total' + leaderClass + '" style="color:' + teamColor + ';">'
-                + String(afterTeams[team]) + "</span>"
+                + formatBingoPoints(afterTeams[team], false) + "</span>"
                 + "</td>"
                 + "</tr>"
               );
@@ -6751,13 +6787,16 @@ def _format_chart_ex_accuracy(
 
 
 def _format_chart_points_cell(breakdown: ChartPlayerPointBreakdown) -> str:
-    bonus = int(breakdown.placement_bonus)
+    accuracy = format_bingo_points(breakdown.accuracy_points)
+    bonus = breakdown.placement_bonus
     if bonus > 0:
         return (
-            f"{int(breakdown.accuracy_points)} "
-            f'<span class="bingo-chart-modal-points-bonus">(+{bonus})</span>'
+            f"{accuracy} "
+            f'<span class="bingo-chart-modal-points-bonus">'
+            f"(+{format_bingo_points(bonus)})"
+            f"</span>"
         )
-    return str(int(breakdown.accuracy_points))
+    return accuracy
 
 
 def _render_bingo_chart_leaderboard_table_html(
