@@ -944,6 +944,9 @@ def _render_bingo_countdown(
     )
     winner_team_json = json.dumps(winner_team)
     winner_color_json = json.dumps(winner_color)
+    day_multipliers_json = json.dumps(
+        [bingo_day_multiplier(day, day_count) for day in range(1, day_count + 1)]
+    )
 
     components.html(
         f"""
@@ -989,11 +992,27 @@ def _render_bingo_countdown(
           const updatedMs = {updated_ms_json};
           const winnerTeam = {winner_team_json};
           const winnerColor = {winner_color_json};
+          const dayMultipliers = {day_multipliers_json};
           const labelEl = document.getElementById("bingo-countdown-label");
           const timerEl = document.getElementById("bingo-countdown-timer");
 
           function pad(n) {{
             return String(n).padStart(2, "0");
+          }}
+
+          function isGracePeriodDay(dayIndex) {{
+            const multiplier = dayMultipliers[dayIndex - 1];
+            return multiplier === 0;
+          }}
+
+          function dayEndsLabel(dayIndex) {{
+            if (dayIndex >= dayCount) {{
+              return "Final Day Ends:";
+            }}
+            if (isGracePeriodDay(dayIndex)) {{
+              return "Day " + dayIndex + " / " + dayCount + " (Grace Period) Ends:";
+            }}
+            return "Day " + dayIndex + " / " + dayCount + " Ends:";
           }}
 
           function formatRemaining(ms) {{
@@ -1132,11 +1151,7 @@ def _render_bingo_countdown(
 
             const dayIndex = Math.floor((now - startMs) / dayMs) + 1;
             const dayEndMs = startMs + dayIndex * dayMs;
-            if (dayIndex >= dayCount) {{
-              labelEl.textContent = "Final Day Ends:";
-            }} else {{
-              labelEl.textContent = "Day " + dayIndex + " / " + dayCount + " Ends:";
-            }}
+            labelEl.textContent = dayEndsLabel(dayIndex);
             showCountdownRemaining(dayEndMs - now);
           }}
 
@@ -2262,8 +2277,6 @@ def _inject_scoreboard_player_row_highlight(highlight_team: str | None) -> None:
 
 def _bingo_scoreboard_multiplier_label(day: int, *, day_count: int) -> str:
     multiplier = bingo_day_multiplier(day, day_count)
-    if multiplier <= 1:
-        return ""
     if day > 1:
         previous = bingo_day_multiplier(day - 1, day_count)
         if multiplier == previous:
@@ -2279,6 +2292,10 @@ def _bingo_scoreboard_multiplier_highlight_days(
     """Days in the multiplier row to show golden for the selected column."""
     day = int(highlight_day)
     multiplier = bingo_day_multiplier(day, day_count)
+    if multiplier == 0:
+        if _bingo_scoreboard_multiplier_label(day, day_count=day_count):
+            return {day}
+        return set()
     if multiplier <= 1:
         return set()
     start = day

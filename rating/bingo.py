@@ -1180,7 +1180,7 @@ def bingo_day_end(start_time: datetime, day: int) -> datetime:
 def bingo_day_multiplier(day: int, day_count: int) -> int:
     """Point multiplier for a competition day.
 
-    Days 1-2: 1x, days 3-4: 2x, remaining pre-final days: 3x, final day: 10x.
+    Day 1: 0x, day 2: 1x, days 3-4: 2x, remaining pre-final days: 3x, final day: 10x.
     """
     day = int(day)
     day_count = max(1, int(day_count))
@@ -1192,7 +1192,23 @@ def bingo_day_multiplier(day: int, day_count: int) -> int:
         return 3
     if day >= 3:
         return 2
-    return 1
+    if day == 2:
+        return 1
+    return 0
+
+
+def bingo_scoreboard_prospective_day(in_progress: int, *, day_count: int) -> int | None:
+    """Scoreboard column for live prospective points during in_progress."""
+    day = int(in_progress)
+    day_count = max(1, int(day_count))
+    if day < 1 or day > day_count:
+        return None
+    if bingo_day_multiplier(day, day_count) != 0:
+        return day
+    for candidate in range(day + 1, day_count + 1):
+        if bingo_day_multiplier(candidate, day_count) > 0:
+            return candidate
+    return None
 
 
 def completed_bingo_days(
@@ -1616,7 +1632,16 @@ def compute_bingo_scoreboard(
             daily_points[team][day - 1] = points
             totals[team] += points
 
+    prospective_day: int | None = None
     if in_progress is not None:
+        if bingo_day_multiplier(in_progress, day_count) == 0:
+            for team in TEAM_ORDER:
+                daily_points[team][in_progress - 1] = 0
+        prospective_day = bingo_scoreboard_prospective_day(
+            in_progress,
+            day_count=day_count,
+        )
+        scoring_day = prospective_day if prospective_day is not None else in_progress
         live_standings = load_bingo_chart_standings_data(
             start_time=settings.start_time,
             end_time=None,
@@ -1626,18 +1651,21 @@ def compute_bingo_scoreboard(
             charts=charts,
             standings_data=live_standings,
             board_width=int(settings.board_width),
-            day=in_progress,
+            day=scoring_day,
             day_count=day_count,
         )
-        for team in TEAM_ORDER:
-            daily_points[team][in_progress - 1] = int(live_scores[team].points)
+        if prospective_day is not None:
+            for team in TEAM_ORDER:
+                daily_points[team][prospective_day - 1] = int(
+                    live_scores[team].points
+                )
 
     return BingoScoreboard(
         day_count=day_count,
         completed_days=finished,
         daily_points=daily_points,
         totals=totals,
-        prospective_day=in_progress,
+        prospective_day=prospective_day,
     )
 
 
