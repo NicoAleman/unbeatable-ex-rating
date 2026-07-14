@@ -340,12 +340,51 @@ def _player_chart_score(
     return 0
 
 
-def _format_player_max_score_label(chart: BingoChart, score: int) -> str:
+def _ordinal_rank(rank: int) -> str:
+    if 11 <= (rank % 100) <= 13:
+        suffix = "th"
+    else:
+        suffix = {1: "st", 2: "nd", 3: "rd"}.get(rank % 10, "th")
+    return f"{rank}{suffix}"
+
+
+def _player_chart_placement_rank(
+    chart: BingoChart,
+    *,
+    player_id: str,
+    leaderboard_by_chart: dict[tuple[str, str], list[BingoChartLeaderboardEntry]],
+    roster: dict[str, list[BingoTeamPlayer]],
+) -> int | None:
+    entries = merge_chart_leaderboard_with_roster(
+        roster,
+        leaderboard_by_chart.get((chart.song, chart.difficulty), []),
+    )
+    players = {
+        entry.player_id: (entry.team, int(entry.score)) for entry in entries
+    }
+    if player_id not in players:
+        return None
+    breakdowns = compute_chart_player_point_breakdowns(
+        song=chart.song,
+        difficulty=chart.difficulty,
+        players=players,
+    )
+    return int(breakdowns[player_id].rank)
+
+
+def _format_player_chart_footer_label(
+    chart: BingoChart,
+    *,
+    score: int,
+    rank: int | None,
+) -> str:
     max_score = bingo_chart_max_score(chart.song, chart.difficulty)
     if max_score is None or max_score <= 0:
-        return "— Max Score"
+        return "— - — Place"
     pct = ex_accuracy_percent(score, max_score)
-    return f"{pct:.2f}% Max Score"
+    if rank is None or rank <= 0:
+        return f"{pct:.2f}% - — Place"
+    return f"{pct:.2f}% - {_ordinal_rank(rank)} Place"
 
 
 def _player_block_html(*, team: str, score: int) -> str:
@@ -1473,7 +1512,7 @@ def _render_cell_html(
         if not not_played:
             player_bot_html = (
                 f'<div class="bingo-cell-bot">'
-                f"{_player_footer_html(player_max_score_label or '— Max Score')}"
+                f"{_player_footer_html(player_max_score_label or '— - — Place')}"
                 "</div>"
             )
         body_class = "bingo-cell-body"
@@ -6779,9 +6818,16 @@ def _render_bingo_board_fragment(
                     player_id=view_player.player_id,
                     leaderboard_by_chart=leaderboard_by_chart,
                 )
-                player_max_score_label = _format_player_max_score_label(
+                player_rank = _player_chart_placement_rank(
                     chart,
-                    int(player_score),
+                    player_id=view_player.player_id,
+                    leaderboard_by_chart=leaderboard_by_chart,
+                    roster=teams,
+                )
+                player_max_score_label = _format_player_chart_footer_label(
+                    chart,
+                    score=int(player_score),
+                    rank=player_rank,
                 )
             cells_html.append(
                 _render_cell_html(
