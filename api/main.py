@@ -4,7 +4,7 @@ from fastapi import FastAPI, Header
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict
 
-from rating.bingo import process_bingo_mod_submission
+from rating.bingo import get_bingo_board_for_mod, process_bingo_mod_submission
 from rating.submission_api import authenticate_bearer_token, process_mod_submission
 
 app = FastAPI(title="UNBEATABLE Submission API")
@@ -54,6 +54,15 @@ def _require_auth(authorization: str | None) -> JSONResponse | None:
 @app.get("/health")
 def health() -> dict[str, bool]:
     return {"ok": True}
+
+
+@app.get("/bingo/board")
+def bingo_board():
+    """Public read of the active Bingo board charts (for Arcade song filter)."""
+    try:
+        return get_bingo_board_for_mod()
+    except Exception as exc:  # noqa: BLE001 — surface DB/config failures to the client
+        return _error_response(500, f"Could not load Bingo board: {exc}")
 
 
 @app.post("/submit")

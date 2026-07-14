@@ -859,6 +859,26 @@ def bingo_charts_on_board(
     ]
 
 
+def get_bingo_board_for_mod(db_url: str | None = None) -> dict[str, object]:
+    """Public board payload for the Bingo Arcade song filter (no auth)."""
+    settings = load_bingo_settings(db_url=db_url)
+    board_width = settings.board_width if settings is not None else 5
+    charts = bingo_charts_on_board(load_bingo_charts(db_url=db_url), board_width)
+    return {
+        "board_width": board_width,
+        "charts": [
+            {
+                "song": chart.song,
+                "difficulty": chart.difficulty,
+                "row": chart.row,
+                "column": chart.column,
+                "group": chart.group,
+            }
+            for chart in charts
+        ],
+    }
+
+
 def load_bingo_player_chart_best(
     *,
     player_id: str,

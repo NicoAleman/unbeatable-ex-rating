@@ -20,6 +20,7 @@ For shared auth, deploy, and error format, see [`SUBMISSION_BACKEND.md`](SUBMISS
 | Endpoint | Method | Purpose |
 |---|---|---|
 | `/health` | `GET` | Health check |
+| `/bingo/board` | `GET` | Active board charts (public, no auth) |
 | `/submit/bingo` | `POST` | Submit one Bingo chart score |
 
 ---
@@ -54,6 +55,29 @@ The API key is per-user in mod config — not stored in this repo.
 ---
 
 ## API reference
+
+### `GET /bingo/board`
+
+**Auth:** none (public read).
+
+Returns charts inside the active `board_width × board_width` grid from `bingo_charts` / `bingo_settings`.
+
+```json
+{
+  "board_width": 5,
+  "charts": [
+    {
+      "song": "NOISZ - Done In Love",
+      "difficulty": "UNBEATABLE",
+      "row": 0,
+      "column": 0,
+      "group": null
+    }
+  ]
+}
+```
+
+Used by the Bingo mod Arcade **Category → Bingo** song filter.
 
 ### `POST /submit/bingo`
 
