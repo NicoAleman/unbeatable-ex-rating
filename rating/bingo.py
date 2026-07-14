@@ -1232,11 +1232,22 @@ def format_leader_score(score: int) -> str:
     return f"{int(score):,}"
 
 
+def _bingo_points_display_body(abs_value: float) -> str:
+    """Display body for |v2 chart points|; precision depends on magnitude."""
+    magnitude = abs(float(abs_value))
+    if magnitude >= 10:
+        return str(int(round(magnitude)))
+    if magnitude == 0:
+        return "0"
+    if magnitude < 0.1:
+        return f"{magnitude:.2f}"
+    return f"{magnitude:.1f}"
+
+
 def format_bingo_points(amount: float | int, *, signed: bool = False) -> str:
-    """Format v2 chart scoring points for display (< 10 shows one decimal)."""
+    """Format v2 chart scoring points for display."""
     value = float(amount)
-    abs_value = abs(value)
-    body = f"{abs_value:.1f}" if abs_value < 10 else str(int(round(abs_value)))
+    body = _bingo_points_display_body(value)
     if not signed:
         return f"-{body}" if value < 0 else body
     if value > 0:
@@ -1253,9 +1264,7 @@ def format_bingo_signed_delta(amount: float | int) -> str:
         if value < 0:
             return str(int(round(value)))
         return "0"
-    if value < 10:
-        return f"+{value:.1f}"
-    return f"+{int(round(value))}"
+    return f"+{_bingo_points_display_body(value)}"
 
 
 def bingo_chart_max_score(song: str, difficulty: str) -> int | None:

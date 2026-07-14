@@ -6017,10 +6017,17 @@ _BINGO_UPSCORE_CALCULATOR_JS = r"""
             return Math.min(pct, 100);
           }
 
+          function formatBingoPointsBody(absVal) {
+            const magnitude = Math.abs(Number(absVal));
+            if (magnitude >= 10) return String(Math.round(magnitude));
+            if (magnitude === 0) return "0";
+            if (magnitude < 0.1) return magnitude.toFixed(2);
+            return magnitude.toFixed(1);
+          }
+
           function formatBingoPoints(value, signed) {
             const num = Number(value);
-            const absVal = Math.abs(num);
-            const body = absVal < 10 ? absVal.toFixed(1) : String(Math.round(absVal));
+            const body = formatBingoPointsBody(num);
             if (!signed) {
               return num < 0 ? "-" + body : body;
             }
@@ -6035,8 +6042,7 @@ _BINGO_UPSCORE_CALCULATOR_JS = r"""
               if (num < 0) return String(Math.round(num));
               return "0";
             }
-            if (num < 10) return "+" + num.toFixed(1);
-            return "+" + String(Math.round(num));
+            return "+" + formatBingoPointsBody(num);
           }
 
           function otherTeamsMaxTotal(totals, team) {
