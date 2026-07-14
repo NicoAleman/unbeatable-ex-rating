@@ -2093,7 +2093,9 @@ def build_bingo_board_css() -> str:
         flex-shrink: 0;
     }}
     [data-testid="stAppViewContainer"]:has(.bingo-lines-toggle:checked) .bingo-line-svg {{
-        display: none !important;
+        opacity: 0 !important;
+        visibility: hidden !important;
+        transition: opacity 0.14s ease, visibility 0s linear 0.14s !important;
     }}
     [data-testid="stAppViewContainer"]:not(:has(.bingo-detailed-toggle:checked)) .bingo-cell-mid,
     [data-testid="stAppViewContainer"]:not(:has(.bingo-detailed-toggle:checked)) .bingo-cell-bot {{
@@ -2452,6 +2454,9 @@ def build_bingo_board_css() -> str:
         z-index: 3;
         pointer-events: none;
         overflow: visible;
+        opacity: 1;
+        visibility: visible;
+        transition: opacity 0.14s ease, visibility 0s linear 0s;
     }}
     .bingo-cell-empty {{
         border: {DEFAULT_CELL_BORDER};
@@ -5133,11 +5138,11 @@ def _bingo_board_component_css(*, cols: int, rows: int) -> str:
         grid-template-columns: repeat({cols}, minmax(0, 1fr));
         grid-template-rows: repeat({rows}, minmax(0, 1fr));
     }}
-    .bingo-board-root.hide-lines .bingo-line-svg {{
-        display: none !important;
-    }}
+    .bingo-board-root.hide-lines .bingo-line-svg,
     .bingo-board-root.hide-colors .bingo-line-svg {{
-        display: none !important;
+        opacity: 0;
+        visibility: hidden;
+        transition: opacity 0.14s ease, visibility 0s linear 0.14s;
     }}
     .bingo-board-root:not(.is-detailed):not(.is-player-board) .bingo-cell-mid,
     .bingo-board-root:not(.is-detailed):not(.is-player-board) .bingo-cell-bot {{
@@ -5473,6 +5478,9 @@ def _bingo_board_component_css(*, cols: int, rows: int) -> str:
         z-index: 3;
         pointer-events: none;
         overflow: visible;
+        opacity: 1;
+        visibility: visible;
+        transition: opacity 0.14s ease, visibility 0s linear 0s;
     }}
     .bingo-cell-empty {{
         border: {DEFAULT_CELL_BORDER};
