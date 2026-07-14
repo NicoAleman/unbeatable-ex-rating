@@ -53,6 +53,7 @@ from rating.bingo_chart_scoring import (
 )
 from rating.bingo_upscore import build_chart_upscore_payload
 from rating.calculator import ex_accuracy_percent
+from rating.constants import SCORE_SOURCE_IN_GAME
 from rating.bingo_proof_storage import create_bingo_proof_signed_url
 from rating.constants import SCORE_SOURCE_IN_GAME, SCORE_SOURCE_SUBMISSION
 from rating.formatting import format_difficulty_display_name
@@ -327,17 +328,43 @@ def _inject_bingo_board_layout_css(board_width: str) -> None:
     )
 
 
+def _player_chart_entry(
+    chart: BingoChart,
+    *,
+    player_id: str,
+    leaderboard_by_chart: dict[tuple[str, str], list[BingoChartLeaderboardEntry]],
+) -> BingoChartLeaderboardEntry | None:
+    entries = leaderboard_by_chart.get((chart.song, chart.difficulty), [])
+    for entry in entries:
+        if entry.player_id == player_id:
+            return entry
+    return None
+
+
 def _player_chart_score(
     chart: BingoChart,
     *,
     player_id: str,
     leaderboard_by_chart: dict[tuple[str, str], list[BingoChartLeaderboardEntry]],
 ) -> int:
-    entries = leaderboard_by_chart.get((chart.song, chart.difficulty), [])
-    for entry in entries:
-        if entry.player_id == player_id:
-            return int(entry.score)
-    return 0
+    entry = _player_chart_entry(
+        chart,
+        player_id=player_id,
+        leaderboard_by_chart=leaderboard_by_chart,
+    )
+    return int(entry.score) if entry is not None else 0
+
+
+def _player_crit_disabled_row_html(entry: BingoChartLeaderboardEntry | None) -> str:
+    if entry is None or entry.source != SCORE_SOURCE_IN_GAME:
+        return ""
+    if entry.critical is None or entry.critical != 0:
+        return ""
+    return (
+        '<div class="bingo-cell-crit-row">'
+        '<span class="bingo-cell-crit-disabled">CRIT DISABLED</span>'
+        "</div>"
+    )
 
 
 def _ordinal_rank(rank: int) -> str:
@@ -1480,6 +1507,7 @@ def _render_cell_html(
     view_player: BingoTeamPlayer | None = None,
     player_score: int | None = None,
     player_max_score_label: str | None = None,
+    player_crit_row_html: str = "",
 ) -> str:
     chart = standing.chart
     song = html.escape(chart.display_name)
@@ -1526,6 +1554,7 @@ def _render_cell_html(
             "</div>"
             f'<div class="{player_view_class}">'
             f'<div class="bingo-cell-mid">{_player_block_html(team=view_player.team, score=player_score_val)}</div>'
+            f"{player_crit_row_html}"
             f"{player_bot_html}"
             "</div>"
             "</div>"
@@ -5360,10 +5389,32 @@ def _bingo_board_component_css(*, cols: int, rows: int) -> str:
         opacity: 1;
         pointer-events: auto;
     }}
+    .bingo-board-root.is-player-board.has-player-data .bingo-cell-player-view:has(.bingo-cell-crit-row) {{
+        grid-template-rows: minmax(3.25rem, 1fr) auto minmax(2.15rem, auto);
+    }}
     .bingo-board-root.is-player-board.has-player-data .bingo-cell-player-view .bingo-cell-mid,
     .bingo-board-root.is-player-board.has-player-data .bingo-cell-player-view .bingo-cell-bot {{
         opacity: 1;
         transform: none;
+    }}
+    .bingo-cell-crit-row {{
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        min-height: 0;
+        padding: 0.08rem 0.4rem 0.12rem;
+    }}
+    .bingo-cell-crit-disabled {{
+        display: inline-block;
+        color: #ff5c67;
+        background: #000000;
+        font-size: 0.78rem;
+        font-weight: 800;
+        line-height: 1.2;
+        padding: 0.16rem 0.42rem;
+        border-radius: 0.18rem;
+        letter-spacing: 0.03em;
+        white-space: nowrap;
     }}
     .bingo-board-root.is-player-board.has-player-data .bingo-cell:hover {{
         z-index: 6;
@@ -6902,12 +6953,14 @@ def _render_bingo_board_fragment(
             )
             player_score: int | None = None
             player_max_score_label: str | None = None
+            player_crit_row_html = ""
             if view_player is not None:
-                player_score = _player_chart_score(
+                player_entry = _player_chart_entry(
                     chart,
                     player_id=view_player.player_id,
                     leaderboard_by_chart=leaderboard_by_chart,
                 )
+                player_score = int(player_entry.score) if player_entry is not None else 0
                 player_rank = _player_chart_placement_rank(
                     chart,
                     player_id=view_player.player_id,
@@ -6919,6 +6972,7 @@ def _render_bingo_board_fragment(
                     score=int(player_score),
                     rank=player_rank,
                 )
+                player_crit_row_html = _player_crit_disabled_row_html(player_entry)
             cells_html.append(
                 _render_cell_html(
                     standing,
@@ -6930,6 +6984,7 @@ def _render_bingo_board_fragment(
                     view_player=view_player,
                     player_score=player_score,
                     player_max_score_label=player_max_score_label,
+                    player_crit_row_html=player_crit_row_html,
                 )
             )
 

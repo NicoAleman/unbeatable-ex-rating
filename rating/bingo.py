@@ -68,6 +68,7 @@ class BingoChartLeaderboardEntry:
     score: int
     source: str | None = None
     proof_path: str | None = None
+    critical: int | None = None
 
 
 @dataclass(frozen=True)
@@ -342,7 +343,8 @@ def load_bingo_chart_player_leaderboard(
                             team,
                             score,
                             source,
-                            proof_path
+                            proof_path,
+                            critical
                         FROM bingo_scores
                         WHERE song = %s
                           AND difficulty = %s
@@ -360,7 +362,8 @@ def load_bingo_chart_player_leaderboard(
                             team,
                             score,
                             source,
-                            proof_path
+                            proof_path,
+                            critical
                         FROM bingo_scores
                         WHERE song = %s
                           AND difficulty = %s
@@ -382,6 +385,7 @@ def load_bingo_chart_player_leaderboard(
             score=int(row["score"]),
             source=str(row["source"]) if row["source"] is not None else None,
             proof_path=str(row["proof_path"]) if row["proof_path"] is not None else None,
+            critical=int(row["critical"]) if row["critical"] is not None else None,
         )
         for row in rows
     ]
@@ -413,7 +417,8 @@ def load_all_bingo_chart_player_leaderboards(
                             team,
                             score,
                             source,
-                            proof_path
+                            proof_path,
+                            critical
                         FROM bingo_scores
                         WHERE created_at >= %s
                         ORDER BY song, difficulty, player_id, score DESC, created_at DESC
@@ -431,7 +436,8 @@ def load_all_bingo_chart_player_leaderboards(
                             team,
                             score,
                             source,
-                            proof_path
+                            proof_path,
+                            critical
                         FROM bingo_scores
                         WHERE created_at >= %s
                           AND created_at < %s
@@ -456,6 +462,7 @@ def load_all_bingo_chart_player_leaderboards(
                 proof_path=(
                     str(row["proof_path"]) if row["proof_path"] is not None else None
                 ),
+                critical=int(row["critical"]) if row["critical"] is not None else None,
             )
         )
     for entries in result.values():
