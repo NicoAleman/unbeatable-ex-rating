@@ -3038,6 +3038,87 @@ def _render_bingo_scoreboard(
     )
 
 
+def _bingo_activity_timestamp_ms(value: datetime) -> int:
+    moment = value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+    return int(moment.astimezone(timezone.utc).timestamp() * 1000)
+
+
+def _bingo_activity_time_html(created_at: datetime) -> str:
+    moment = created_at if created_at.tzinfo is not None else created_at.replace(tzinfo=timezone.utc)
+    moment_utc = moment.astimezone(timezone.utc)
+    event_ms = _bingo_activity_timestamp_ms(created_at)
+    time_ago = _format_bingo_time_ago(created_at)
+    seconds = max(0, int((datetime.now(timezone.utc) - moment_utc).total_seconds()))
+    date_attr = ""
+    if seconds >= 7 * 24 * 3600:
+        date_label = moment.astimezone(BINGO_DISPLAY_TZ).strftime("%b %d, %Y")
+        date_attr = f' data-date-label="{html.escape(date_label)}"'
+    return (
+        f'<span class="bingo-activity-time" data-ts="{event_ms}"{date_attr}>'
+        f"{html.escape(time_ago)}</span>"
+    )
+
+
+_BINGO_ACTIVITY_TIME_TICKER_JS = """
+(function () {
+  function formatBingoActivityTimeAgo(ms, dateLabel) {
+    if (dateLabel) {
+      return dateLabel;
+    }
+    const seconds = Math.max(0, Math.floor((Date.now() - ms) / 1000));
+    if (seconds < 45) {
+      return "just now";
+    }
+    const minutes = Math.floor(seconds / 60);
+    if (minutes < 60) {
+      return minutes === 1 ? "1 minute ago" : minutes + " minutes ago";
+    }
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) {
+      return hours === 1 ? "1 hour ago" : hours + " hours ago";
+    }
+    const days = Math.floor(hours / 24);
+    if (days < 7) {
+      return days === 1 ? "1 day ago" : days + " days ago";
+    }
+    return dateLabel || "";
+  }
+
+  function tickActivityTimes() {
+    let doc;
+    try {
+      doc = window.parent.document;
+    } catch (error) {
+      return;
+    }
+    doc.querySelectorAll(".bingo-activity-time[data-ts]").forEach(function (el) {
+      const ms = Number(el.getAttribute("data-ts"));
+      if (!Number.isFinite(ms)) {
+        return;
+      }
+      const dateLabel = el.getAttribute("data-date-label") || "";
+      el.textContent = formatBingoActivityTimeAgo(ms, dateLabel);
+    });
+  }
+
+  tickActivityTimes();
+  const parentWindow = window.parent;
+  if (parentWindow.__bingoActivityTimeTicker) {
+    clearInterval(parentWindow.__bingoActivityTimeTicker);
+  }
+  parentWindow.__bingoActivityTimeTicker = setInterval(tickActivityTimes, 1000);
+})();
+"""
+
+
+def _mount_bingo_activity_time_ticker() -> None:
+    components.html(
+        f"<script>{_BINGO_ACTIVITY_TIME_TICKER_JS}</script>",
+        height=0,
+        scrolling=False,
+    )
+
+
 def _format_bingo_time_ago(value: datetime) -> str:
     now = datetime.now(timezone.utc)
     moment = value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
@@ -3122,7 +3203,7 @@ def _render_bingo_claim_feed_item(event: BingoSquareClaimEvent) -> str:
         f"{event.chart_display_name} "
         f"[{format_difficulty_display_name(event.difficulty)}]"
     )
-    time_ago = html.escape(_format_bingo_time_ago(event.created_at))
+    time_html = _bingo_activity_time_html(event.created_at)
     if event.prev_team is None:
         action = f'claimed <span class="bingo-activity-chart">{chart}</span>'
     else:
@@ -3159,7 +3240,7 @@ def _render_bingo_claim_feed_item(event: BingoSquareClaimEvent) -> str:
         f'title="{html.escape(event.team)}">{player}</span>'
         f'<span class="bingo-activity-action">{action}{badges_html}</span>'
         f"{_render_bingo_point_impacts_html(event.point_impacts)}"
-        f'<span class="bingo-activity-time">{time_ago}</span>'
+        f"{time_html}"
         "</div>"
     )
 
@@ -3525,6 +3606,7 @@ def _render_bingo_activity_feed(*, settings: BingoSettings) -> None:
             "</div>",
             unsafe_allow_html=True,
         )
+        _mount_bingo_activity_time_ticker()
 
 
 def _bingo_player_option_label(player: BingoTeamPlayer) -> str:
