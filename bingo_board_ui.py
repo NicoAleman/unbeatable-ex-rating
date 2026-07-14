@@ -51,6 +51,7 @@ from rating.bingo_chart_scoring import (
     bingo_scoring_version,
     compute_chart_player_point_breakdowns,
 )
+from rating.bingo_upscore import build_chart_upscore_payload
 from rating.calculator import ex_accuracy_percent
 from rating.bingo_proof_storage import create_bingo_proof_signed_url
 from rating.constants import SCORE_SOURCE_IN_GAME, SCORE_SOURCE_SUBMISSION
@@ -1662,6 +1663,275 @@ _BINGO_CHART_MODAL_POINTS_COLUMN_CSS = """
     }
 """
 
+_BINGO_CHART_UPSCORE_CSS = """
+    .bingo-chart-modal-header {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 0.75rem;
+        margin: 0 2.2rem 0.2rem 0;
+    }
+    .bingo-chart-modal-title {
+        margin: 0 !important;
+        flex: 1 1 auto;
+        min-width: 0;
+    }
+    .bingo-chart-modal-upscore-btn {
+        flex: 0 0 auto;
+        border: 1px solid rgba(110, 176, 255, 0.42);
+        background: rgba(110, 176, 255, 0.12);
+        color: #9ec8ff;
+        border-radius: 999px;
+        padding: 0.35rem 0.8rem;
+        font-size: 0.78rem;
+        font-weight: 700;
+        letter-spacing: 0.02em;
+        line-height: 1.2;
+        cursor: pointer;
+        white-space: nowrap;
+    }
+    .bingo-chart-modal-upscore-btn:hover,
+    .bingo-chart-modal-upscore-btn.is-active {
+        background: rgba(110, 176, 255, 0.22);
+        color: #d7eaff;
+        border-color: rgba(110, 176, 255, 0.62);
+    }
+    .bingo-chart-modal-upscore-panel {
+        overflow: hidden;
+        max-height: 0;
+        opacity: 0;
+        margin-bottom: 0;
+        transition: max-height 0.28s ease, opacity 0.22s ease, margin-bottom 0.28s ease;
+    }
+    .bingo-chart-modal-upscore-panel.is-open {
+        max-height: 48rem;
+        opacity: 1;
+        margin-bottom: 1rem;
+        overflow: visible;
+    }
+    .bingo-chart-modal-upscore-inner {
+        border: 1px solid rgba(234, 234, 234, 0.14);
+        border-radius: 0.65rem;
+        background: rgba(255, 255, 255, 0.03);
+        padding: 0.85rem 0.95rem 1.1rem;
+    }
+    .bingo-upscore-player-picker {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 0.55rem;
+        margin-bottom: 0.85rem;
+    }
+    .bingo-upscore-player-picker input,
+    .bingo-upscore-player-picker select {
+        width: 100%;
+        box-sizing: border-box;
+        border: 1px solid rgba(234, 234, 234, 0.18);
+        border-radius: 0.45rem;
+        background: rgba(8, 12, 28, 0.85);
+        color: #eaeaea;
+        padding: 0.45rem 0.6rem;
+        font-size: 0.88rem;
+        font-family: "Source Sans Pro", "Segoe UI", sans-serif;
+    }
+    .bingo-upscore-player-name {
+        font-size: 0.95rem;
+        font-weight: 700;
+        margin-bottom: 0.65rem;
+    }
+    .bingo-upscore-metrics {
+        display: flex;
+        justify-content: center;
+        align-items: flex-start;
+        gap: 3.75rem;
+        margin-bottom: 0.85rem;
+        font-size: 1.08rem;
+    }
+    .bingo-upscore-metrics > div {
+        text-align: center;
+    }
+    .bingo-upscore-metrics dt {
+        margin: 0;
+        color: rgba(234, 234, 234, 0.58);
+        font-weight: 700;
+        font-size: 1.08rem;
+    }
+    .bingo-upscore-metrics dd {
+        margin: 0.15rem 0 0;
+        font-size: 1.08rem;
+        font-weight: 800;
+        color: #f5f5f5;
+        font-variant-numeric: tabular-nums;
+    }
+    .bingo-upscore-slider-label {
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        gap: 0.75rem;
+        font-size: 1.08rem;
+        font-weight: 700;
+        color: rgba(234, 234, 234, 0.72);
+        margin-bottom: 0.35rem;
+    }
+    .bingo-upscore-slider-label span:last-child {
+        color: #f5f5f5;
+        font-variant-numeric: tabular-nums;
+    }
+    .bingo-upscore-slider-wrap {
+        position: relative;
+        width: 100%;
+        margin: 0 0 0.85rem;
+        box-sizing: border-box;
+    }
+    .bingo-upscore-slider {
+        width: 100%;
+        margin: 0;
+        accent-color: #6eb0ff;
+        display: block;
+        position: relative;
+        z-index: 2;
+    }
+    .bingo-upscore-slider-marker {
+        position: absolute;
+        top: 50%;
+        transform: translate(-50%, -50%);
+        width: 0;
+        height: 1.45rem;
+        border-left: 2px dashed rgba(234, 234, 234, 0.62);
+        pointer-events: none;
+        z-index: 1;
+    }
+    .bingo-upscore-results {
+        border-top: 1px solid rgba(234, 234, 234, 0.12);
+        padding-top: 0.75rem;
+        font-size: 1.08rem;
+    }
+    .bingo-upscore-required-row {
+        display: flex;
+        justify-content: center;
+        align-items: flex-start;
+        gap: 3.75rem;
+        margin-bottom: 0.75rem;
+    }
+    .bingo-upscore-required-item {
+        margin: 0;
+        text-align: center;
+    }
+    .bingo-upscore-required-item dt {
+        margin: 0;
+        color: rgba(234, 234, 234, 0.58);
+        font-weight: 700;
+        font-size: 1.08rem;
+    }
+    .bingo-upscore-changes-title {
+        margin: 0;
+        color: rgba(234, 234, 234, 0.58);
+        font-weight: 700;
+        letter-spacing: 0.03em;
+        text-transform: uppercase;
+        font-size: 1.08rem;
+    }
+    .bingo-upscore-required-item dd {
+        margin: 0.2rem 0 0;
+        font-size: 1.08rem;
+        font-weight: 800;
+        color: #f5f5f5;
+        font-variant-numeric: tabular-nums;
+    }
+    .bingo-upscore-placement-climb {
+        font-size: 1.08rem;
+        font-weight: 700;
+        color: #5ee09a;
+        margin-left: 0.35rem;
+    }
+    .bingo-upscore-required-points-diff {
+        font-size: 1.08rem;
+        font-weight: 800;
+        color: #5ee09a;
+        margin-left: 0.2rem;
+    }
+    .bingo-upscore-required-points-diff.is-negative {
+        color: #ff7a84;
+    }
+    .bingo-upscore-required-points-diff.is-neutral {
+        color: rgba(234, 234, 234, 0.72);
+    }
+    .bingo-upscore-changes-title {
+        margin: 1.45rem 0 0.5rem;
+        text-align: center;
+    }
+    .bingo-upscore-changes {
+        display: flex;
+        justify-content: center;
+    }
+    .bingo-upscore-changes-table {
+        width: auto;
+        border-collapse: separate;
+        border-spacing: 0 0.4rem;
+        table-layout: fixed;
+        font-size: 1.08rem;
+    }
+    .bingo-upscore-changes-table col.bingo-upscore-col-team {
+        width: 4.25rem;
+    }
+    .bingo-upscore-changes-table col.bingo-upscore-col-delta {
+        width: 3.1rem;
+    }
+    .bingo-upscore-changes-table col.bingo-upscore-col-arrow {
+        width: 1.65rem;
+    }
+    .bingo-upscore-changes-table col.bingo-upscore-col-total {
+        width: 3.35rem;
+    }
+    .bingo-upscore-changes-table td {
+        padding: 0.5rem 0.35rem;
+        font-variant-numeric: tabular-nums;
+        vertical-align: middle;
+        white-space: nowrap;
+    }
+    .bingo-upscore-changes-table td:first-child {
+        border-radius: 0.4rem 0 0 0.4rem;
+        font-weight: 700;
+        text-align: left;
+    }
+    .bingo-upscore-changes-table td:last-child {
+        border-radius: 0 0.4rem 0.4rem 0;
+        text-align: right;
+    }
+    .bingo-upscore-change-delta {
+        text-align: right;
+        font-weight: 800;
+    }
+    .bingo-upscore-change-arrow {
+        text-align: center;
+        font-size: 1.35rem;
+        line-height: 1;
+        font-weight: 900;
+        color: rgba(234, 234, 234, 0.82);
+    }
+    .bingo-upscore-change-total {
+        display: inline-block;
+        text-align: right;
+        font-weight: 800;
+    }
+    .bingo-upscore-change-total.is-leader {
+        font-weight: 900;
+        text-shadow: 0 0 10px currentColor;
+        box-shadow: inset 0 0 0 1px color-mix(in srgb, currentColor 55%, transparent);
+        border-radius: 0.35rem;
+        padding: 0.06rem 0.28rem;
+        background: color-mix(in srgb, currentColor 14%, transparent);
+    }
+    .bingo-upscore-change-delta.is-positive {
+        color: #5ee09a;
+    }
+    .bingo-upscore-change-delta.is-negative {
+        color: #ff7a84;
+    }
+    .bingo-upscore-change-delta.is-neutral {
+        color: #f5f5f5;
+    }
+"""
+
 _BINGO_CHART_MODAL_ANIMATION_CSS = """
     .bingo-chart-modal-overlay {
         display: flex;
@@ -2007,6 +2277,7 @@ def build_bingo_board_css() -> str:
         text-align: right !important;
     }}
     {_BINGO_CHART_MODAL_POINTS_COLUMN_CSS}
+    {_BINGO_CHART_UPSCORE_CSS}
     .bingo-chart-modal-proof-col {{
         width: 2rem;
         min-width: 2rem;
@@ -4653,9 +4924,10 @@ def _build_bingo_chart_modal_payload(
     for chart in charts:
         raw_entries = entries_by_chart.get((chart.song, chart.difficulty), [])
         entries = merge_chart_leaderboard_with_roster(roster, raw_entries)
+        entries_by_id = {entry.player_id: entry for entry in entries}
         difficulty = html.escape(_difficulty_label(chart.difficulty, chart.level))
         key = f"{chart.row},{chart.column}"
-        payload[key] = {
+        chart_payload: dict[str, str] = {
             "title_html": (
                 f'{html.escape(chart.display_name)} '
                 f'<span class="bingo-chart-modal-diff">{difficulty}</span>'
@@ -4667,6 +4939,21 @@ def _build_bingo_chart_modal_payload(
                 highlight_player_id=highlight_player_id,
             ),
         }
+        upscore_entries = {
+            player_id: (entry.team, entry.display_name, int(entry.score))
+            for player_id, entry in entries_by_id.items()
+        }
+        upscore = build_chart_upscore_payload(
+            song=chart.song,
+            difficulty=chart.difficulty,
+            roster=roster,
+            entries_by_id=upscore_entries,
+            default_player_id=highlight_player_id,
+            max_score=bingo_chart_max_score(chart.song, chart.difficulty),
+        )
+        if upscore is not None:
+            chart_payload["upscore_json"] = json.dumps(upscore)
+        payload[key] = chart_payload
     return payload
 
 
@@ -5219,12 +5506,21 @@ def _bingo_board_component_css(*, cols: int, rows: int) -> str:
         padding: 0.15rem 0.35rem;
     }}
     .bingo-chart-modal-close:hover {{ color: #ffffff; }}
+    .bingo-chart-modal-header {{
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 0.75rem;
+        margin: 0 2.2rem 0.2rem 0;
+    }}
     .bingo-chart-modal-title {{
         font-size: 1.35rem;
         font-weight: 800;
         color: #f5f5f5;
-        margin: 0 2rem 0.2rem 0;
+        margin: 0;
         line-height: 1.25;
+        flex: 1 1 auto;
+        min-width: 0;
     }}
     .bingo-chart-modal-diff {{
         font-weight: 400;
@@ -5277,6 +5573,7 @@ def _bingo_board_component_css(*, cols: int, rows: int) -> str:
         text-align: right !important;
     }}
     {_BINGO_CHART_MODAL_POINTS_COLUMN_CSS}
+    {_BINGO_CHART_UPSCORE_CSS}
     .bingo-chart-modal-proof-col {{
         width: 2rem;
         min-width: 2rem;
@@ -5406,6 +5703,473 @@ def _bingo_board_component_height(rows: int, cols: int) -> int:
     return max(260, rows * cell_px)
 
 
+_BINGO_UPSCORE_CALCULATOR_JS = r"""
+          const TEAM_COLORS = { Eve: "#6eb0ff", Grace: "#ff7a84", Rest: "#5ee09a" };
+          const TEAM_ROW_BG = { Eve: "#0f1f3a", Grace: "#2a1218", Rest: "#0f2418" };
+          let currentUpscore = null;
+          let selectedUpscorePlayerId = null;
+          let upscoreAutoSliderPlayerId = null;
+          let currentLeadThresholdPct = null;
+
+          const upscoreBtn = document.getElementById("bingo-chart-upscore-btn");
+          const upscorePanel = document.getElementById("bingo-chart-upscore-panel");
+          const upscoreSearch = document.getElementById("bingo-upscore-search");
+          const upscoreSelect = document.getElementById("bingo-upscore-player-select");
+          const upscorePicker = document.getElementById("bingo-upscore-player-picker");
+          const upscorePlayerName = document.getElementById("bingo-upscore-player-name");
+          const upscoreCurrentScore = document.getElementById("bingo-upscore-current-score");
+          const upscoreCurrentPct = document.getElementById("bingo-upscore-current-pct");
+          const upscoreTargetPct = document.getElementById("bingo-upscore-target-pct");
+          const upscoreSlider = document.getElementById("bingo-upscore-slider");
+          const upscoreLeadMarker = document.getElementById("bingo-upscore-lead-marker");
+          const upscoreRequiredScore = document.getElementById("bingo-upscore-required-score");
+          const upscoreRequiredPlacement = document.getElementById("bingo-upscore-required-placement");
+          const upscorePointChanges = document.getElementById("bingo-upscore-point-changes");
+
+          function formatScore(score) {
+            return Math.round(Number(score)).toLocaleString("en-US");
+          }
+
+          function formatPct(pct) {
+            return Number(pct).toFixed(2) + "%";
+          }
+
+          function accuracyFormulaPoints(exAccuracy, floor) {
+            const x = Math.max(Number(exAccuracy), Number(floor));
+            const accuracyTerm = Math.pow(x, 3) / Math.pow(100, 3);
+            const denominator = 1 - ((x - 1) / 100);
+            if (denominator <= 0) return 0;
+            return accuracyTerm * (75 + (0.25 / denominator));
+          }
+
+          function flooredAccuracyPoints(floor) {
+            return Math.round(accuracyFormulaPoints(floor, floor));
+          }
+
+          function playerAccuracyPoints(score, maxScore, floor) {
+            const s = Number(score);
+            if (s <= 0) return Math.max(0, flooredAccuracyPoints(floor) - 1);
+            const exAcc = (s / maxScore) * 100;
+            return accuracyFormulaPoints(exAcc, floor);
+          }
+
+          function placementBonus(rank) {
+            if (rank <= 0) return 0;
+            if (rank <= 11) return 100 - (rank - 1) * 3;
+            if (rank <= 22) return 68 - (rank - 12) * 2;
+            if (rank <= 30) return 47 - (rank - 23);
+            return Math.max(0, 40 - (rank - 30));
+          }
+
+          function placementRanksByScore(players) {
+            const ordered = players.slice().sort((a, b) => {
+              if (b.score !== a.score) return b.score - a.score;
+              return a.player_id.localeCompare(b.player_id);
+            });
+            const ranks = {};
+            let index = 0;
+            while (index < ordered.length) {
+              let next = index + 1;
+              while (next < ordered.length && ordered[next].score === ordered[index].score) {
+                next += 1;
+              }
+              const rank = index + 1;
+              for (let i = index; i < next; i += 1) {
+                ranks[ordered[i].player_id] = rank;
+              }
+              index = next;
+            }
+            return ranks;
+          }
+
+          function computeBreakdowns(players, maxScore, floor) {
+            const ranks = placementRanksByScore(players);
+            const breakdowns = {};
+            for (const player of players) {
+              const accuracy = Math.round(playerAccuracyPoints(player.score, maxScore, floor));
+              const placement = placementBonus(ranks[player.player_id]);
+              breakdowns[player.player_id] = {
+                accuracy,
+                placement,
+                total: accuracy + placement,
+                rank: ranks[player.player_id],
+              };
+            }
+            return breakdowns;
+          }
+
+          function teamTotals(players, maxScore, floor) {
+            const breakdowns = computeBreakdowns(players, maxScore, floor);
+            const totals = { Eve: 0, Grace: 0, Rest: 0 };
+            for (const player of players) {
+              totals[player.team] += breakdowns[player.player_id].total;
+            }
+            return totals;
+          }
+
+          function exAccuracyForScore(score, maxScore) {
+            if (maxScore <= 0) return 0;
+            return (Number(score) / maxScore) * 100;
+          }
+
+          function requiredScoreForPercent(maxScore, pct) {
+            const clamped = Math.max(0, Math.min(Number(pct), 100));
+            return Math.floor((clamped / 100) * maxScore);
+          }
+
+          function signedDelta(value) {
+            const rounded = Math.round(Number(value));
+            if (rounded > 0) return "+" + rounded;
+            return String(rounded);
+          }
+
+          function otherTeamsMaxTotal(totals, team) {
+            let otherMax = 0;
+            for (const otherTeam of ["Eve", "Grace", "Rest"]) {
+              if (otherTeam !== team) {
+                otherMax = Math.max(otherMax, totals[otherTeam]);
+              }
+            }
+            return otherMax;
+          }
+
+          function isTeamLeading(player, score, maxScore, floor) {
+            const beforePlayers = currentUpscore.players.map((p) => ({ ...p }));
+            const afterPlayers = beforePlayers.map((p) => (
+              p.player_id === player.player_id ? { ...p, score: Number(score) } : { ...p }
+            ));
+            const afterTeams = teamTotals(afterPlayers, maxScore, floor);
+            return afterTeams[player.team] > otherTeamsMaxTotal(afterTeams, player.team);
+          }
+
+          function computeLeadThresholdPct(player, maxScore, floor) {
+            const beforePlayers = currentUpscore.players.map((p) => ({ ...p }));
+            const beforeTeams = teamTotals(beforePlayers, maxScore, floor);
+            const currentPct = exAccuracyForScore(player.score, maxScore);
+            const minScore = Math.max(
+              Number(player.score) || 0,
+              requiredScoreForPercent(maxScore, currentPct)
+            );
+
+            if (beforeTeams[player.team] > otherTeamsMaxTotal(beforeTeams, player.team)) {
+              return null;
+            }
+            if (!isTeamLeading(player, maxScore, maxScore, floor)) {
+              return null;
+            }
+
+            let lo = minScore;
+            let hi = maxScore;
+            let bestScore = maxScore;
+            while (lo <= hi) {
+              const mid = Math.floor((lo + hi) / 2);
+              if (isTeamLeading(player, mid, maxScore, floor)) {
+                bestScore = mid;
+                hi = mid - 1;
+              } else {
+                lo = mid + 1;
+              }
+            }
+            return exAccuracyForScore(bestScore, maxScore);
+          }
+
+          function updateLeadMarker() {
+            if (!upscoreLeadMarker) return;
+            if (currentLeadThresholdPct === null) {
+              upscoreLeadMarker.hidden = true;
+              return;
+            }
+            const min = Number(upscoreSlider.min);
+            const max = Number(upscoreSlider.max);
+            if (currentLeadThresholdPct <= min || currentLeadThresholdPct > max) {
+              upscoreLeadMarker.hidden = true;
+              return;
+            }
+            const ratio = (currentLeadThresholdPct - min) / (max - min);
+            upscoreLeadMarker.hidden = false;
+            upscoreLeadMarker.style.left = "calc(0.55rem + (100% - 1.1rem) * " + ratio + ")";
+          }
+
+          function activeUpscoreHighlightPlayerId() {
+            return selectedUpscorePlayerId || null;
+          }
+
+          function syncUpscoreScoreboardHighlight() {
+            const playerId = activeUpscoreHighlightPlayerId();
+            bodyEl.querySelectorAll(".bingo-chart-modal-table tbody tr").forEach((row) => {
+              const rowPlayerId = row.dataset.playerId || "";
+              row.classList.toggle(
+                "bingo-chart-modal-row--highlighted",
+                !!playerId && rowPlayerId === playerId
+              );
+            });
+          }
+
+          function resetUpscorePanel() {
+            currentUpscore = null;
+            selectedUpscorePlayerId = null;
+            upscoreAutoSliderPlayerId = null;
+            currentLeadThresholdPct = null;
+            upscorePanel.classList.remove("is-open");
+            upscorePanel.setAttribute("aria-hidden", "true");
+            upscoreBtn.classList.remove("is-active");
+            upscoreBtn.hidden = true;
+            upscoreSearch.value = "";
+            if (upscoreLeadMarker) upscoreLeadMarker.hidden = true;
+          }
+
+          function filteredUpscorePlayers() {
+            if (!currentUpscore) return [];
+            const query = upscoreSearch.value.trim().toLowerCase();
+            return currentUpscore.players
+              .filter((player) => {
+                if (!query) return true;
+                const label = (player.display_name + " " + player.team).toLowerCase();
+                return label.includes(query);
+              })
+              .slice()
+              .sort((a, b) => {
+                const byName = a.display_name.localeCompare(b.display_name, undefined, { sensitivity: "base" });
+                if (byName !== 0) return byName;
+                return a.player_id.localeCompare(b.player_id);
+              });
+          }
+
+          function renderUpscorePlayerOptions() {
+            const players = filteredUpscorePlayers();
+            const query = upscoreSearch.value.trim();
+            upscoreSelect.innerHTML = "";
+
+            if (!query) {
+              const placeholder = document.createElement("option");
+              placeholder.value = "";
+              placeholder.textContent = "Select a player...";
+              placeholder.disabled = true;
+              upscoreSelect.appendChild(placeholder);
+            } else if (players.length === 0) {
+              const placeholder = document.createElement("option");
+              placeholder.value = "";
+              placeholder.textContent = "No matching players";
+              placeholder.disabled = true;
+              upscoreSelect.appendChild(placeholder);
+              selectedUpscorePlayerId = null;
+              upscoreSelect.value = "";
+              return;
+            }
+
+            for (const player of players) {
+              const option = document.createElement("option");
+              option.value = player.player_id;
+              option.textContent = player.display_name + " (" + player.team + ")";
+              upscoreSelect.appendChild(option);
+            }
+
+            if (query && players.length > 0) {
+              selectedUpscorePlayerId = players[0].player_id;
+              upscoreSelect.value = selectedUpscorePlayerId;
+            } else if (selectedUpscorePlayerId && players.some((p) => p.player_id === selectedUpscorePlayerId)) {
+              upscoreSelect.value = selectedUpscorePlayerId;
+            } else {
+              selectedUpscorePlayerId = null;
+              upscoreSelect.value = "";
+            }
+          }
+
+          function selectedUpscorePlayer() {
+            if (!currentUpscore || !selectedUpscorePlayerId) return null;
+            return currentUpscore.players.find((p) => p.player_id === selectedUpscorePlayerId) || null;
+          }
+
+          function renderUpscoreResults() {
+            const player = selectedUpscorePlayer();
+            if (!currentUpscore || !player) {
+              upscorePlayerName.textContent = "";
+              upscoreCurrentScore.textContent = "—";
+              upscoreCurrentPct.textContent = "—";
+              upscoreTargetPct.textContent = "—";
+              upscoreRequiredScore.innerHTML = "—";
+              if (upscoreRequiredPlacement) upscoreRequiredPlacement.textContent = "—";
+              upscorePointChanges.innerHTML = "";
+              return;
+            }
+
+            const maxScore = currentUpscore.max_score;
+            const floor = currentUpscore.ex_accuracy_floor;
+            const currentPct = exAccuracyForScore(player.score, maxScore);
+            const targetPct = Math.max(currentPct, Number(upscoreSlider.value));
+            const requiredScore = requiredScoreForPercent(maxScore, targetPct);
+
+            upscorePlayerName.textContent = player.display_name;
+            upscorePlayerName.style.color = TEAM_COLORS[player.team] || "#eaeaea";
+            upscoreCurrentScore.textContent = player.score > 0 ? formatScore(player.score) : "Not Played";
+            upscoreCurrentPct.textContent = player.score > 0 ? formatPct(currentPct) : "—";
+            upscoreTargetPct.textContent = formatPct(targetPct);
+
+            const beforePlayers = currentUpscore.players.map((p) => ({ ...p }));
+            const afterPlayers = beforePlayers.map((p) => (
+              p.player_id === player.player_id ? { ...p, score: requiredScore } : { ...p }
+            ));
+            const beforeBreakdowns = computeBreakdowns(beforePlayers, maxScore, floor);
+            const afterBreakdowns = computeBreakdowns(afterPlayers, maxScore, floor);
+
+            const currentScore = Math.max(0, Number(player.score) || 0);
+            const scoreDelta = requiredScore - currentScore;
+            const scoreDiffClass = scoreDelta > 0
+              ? ""
+              : scoreDelta < 0
+                ? " is-negative"
+                : " is-neutral";
+            let scoreDiffText = "+0";
+            if (scoreDelta > 0) {
+              scoreDiffText = "+" + formatScore(scoreDelta);
+            } else if (scoreDelta < 0) {
+              scoreDiffText = "-" + formatScore(Math.abs(scoreDelta));
+            }
+            upscoreRequiredScore.innerHTML = (
+              formatScore(requiredScore)
+              + '<span class="bingo-upscore-required-points-diff' + scoreDiffClass + '">('
+              + scoreDiffText
+              + ")</span>"
+            );
+
+            const beforeTeams = teamTotals(beforePlayers, maxScore, floor);
+            const afterTeams = teamTotals(afterPlayers, maxScore, floor);
+
+            const beforeRank = beforeBreakdowns[player.player_id].rank;
+            const afterRank = afterBreakdowns[player.player_id].rank;
+            const climb = beforeRank - afterRank;
+            if (upscoreRequiredPlacement) {
+              let placementText = String(afterRank);
+              if (climb > 0) {
+                placementText += '<span class="bingo-upscore-placement-climb">(↑ ' + climb + ")</span>";
+              }
+              upscoreRequiredPlacement.innerHTML = placementText;
+            }
+
+            const teamOrder = ["Eve", "Grace", "Rest"].slice().sort((a, b) => a.localeCompare(b));
+            let leaderTeam = teamOrder[0];
+            let leaderTotal = afterTeams[leaderTeam];
+            for (const team of teamOrder) {
+              if (afterTeams[team] > leaderTotal) {
+                leaderTeam = team;
+                leaderTotal = afterTeams[team];
+              }
+            }
+
+            const rows = [];
+            for (const team of teamOrder) {
+              const delta = afterTeams[team] - beforeTeams[team];
+              const deltaClass = delta > 0 ? "is-positive" : delta < 0 ? "is-negative" : "is-neutral";
+              const leaderClass = team === leaderTeam ? " is-leader" : "";
+              const rowBg = TEAM_ROW_BG[team] || "#10162d";
+              const teamColor = TEAM_COLORS[team] || "#eaeaea";
+              rows.push(
+                "<tr>"
+                + '<td class="bingo-upscore-change-team" style="background:' + rowBg + "; color:" + teamColor + ';">'
+                + team + "</td>"
+                + '<td class="bingo-upscore-change-delta ' + deltaClass + '" style="background:' + rowBg + ';">'
+                + signedDelta(delta) + "</td>"
+                + '<td class="bingo-upscore-change-arrow" style="background:' + rowBg + ';">→</td>'
+                + '<td class="bingo-upscore-change-total-cell" style="background:' + rowBg + ';">'
+                + '<span class="bingo-upscore-change-total' + leaderClass + '" style="color:' + teamColor + ';">'
+                + String(afterTeams[team]) + "</span>"
+                + "</td>"
+                + "</tr>"
+              );
+            }
+            upscorePointChanges.innerHTML = (
+              '<table class="bingo-upscore-changes-table">'
+              + "<colgroup>"
+              + '<col class="bingo-upscore-col-team">'
+              + '<col class="bingo-upscore-col-delta">'
+              + '<col class="bingo-upscore-col-arrow">'
+              + '<col class="bingo-upscore-col-total">'
+              + "</colgroup><tbody>"
+              + rows.join("")
+              + "</tbody></table>"
+            );
+          }
+
+          function syncUpscorePlayerUi() {
+            renderUpscorePlayerOptions();
+            const player = selectedUpscorePlayer();
+            if (!player) {
+              upscoreAutoSliderPlayerId = null;
+              currentLeadThresholdPct = null;
+              updateLeadMarker();
+              renderUpscoreResults();
+              syncUpscoreScoreboardHighlight();
+              return;
+            }
+            const maxScore = currentUpscore.max_score;
+            const floor = currentUpscore.ex_accuracy_floor;
+            const currentPct = exAccuracyForScore(player.score, maxScore);
+            upscoreSlider.min = String(Math.max(0, currentPct));
+            upscoreSlider.max = "100";
+            upscoreSlider.step = "0.01";
+
+            const isNewPlayer = upscoreAutoSliderPlayerId !== player.player_id;
+            if (isNewPlayer) {
+              upscoreAutoSliderPlayerId = player.player_id;
+              currentLeadThresholdPct = computeLeadThresholdPct(player, maxScore, floor);
+              if (currentLeadThresholdPct !== null && currentLeadThresholdPct > currentPct) {
+                upscoreSlider.value = String(currentLeadThresholdPct);
+              } else {
+                upscoreSlider.value = String(currentPct);
+              }
+            } else {
+              upscoreSlider.value = String(Math.max(currentPct, Number(upscoreSlider.value || currentPct)));
+            }
+            updateLeadMarker();
+            renderUpscoreResults();
+            syncUpscoreScoreboardHighlight();
+          }
+
+          function initUpscore(data) {
+            resetUpscorePanel();
+            if (!data || !data.upscore_json) {
+              return;
+            }
+            try {
+              currentUpscore = JSON.parse(data.upscore_json);
+            } catch (error) {
+              currentUpscore = null;
+              return;
+            }
+            upscoreBtn.hidden = false;
+            upscoreAutoSliderPlayerId = null;
+            selectedUpscorePlayerId = null;
+            if (
+              currentUpscore.default_player_id &&
+              currentUpscore.players.some((p) => p.player_id === currentUpscore.default_player_id)
+            ) {
+              selectedUpscorePlayerId = currentUpscore.default_player_id;
+            }
+            syncUpscorePlayerUi();
+          }
+
+          upscoreBtn.addEventListener("click", (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            if (!currentUpscore) return;
+            const isOpen = upscorePanel.classList.contains("is-open");
+            upscorePanel.classList.toggle("is-open", !isOpen);
+            upscorePanel.setAttribute("aria-hidden", isOpen ? "true" : "false");
+            upscoreBtn.classList.toggle("is-active", !isOpen);
+            if (!isOpen) syncUpscorePlayerUi();
+          });
+          upscoreSearch.addEventListener("input", () => {
+            renderUpscorePlayerOptions();
+            syncUpscorePlayerUi();
+          });
+          upscoreSelect.addEventListener("change", () => {
+            selectedUpscorePlayerId = upscoreSelect.value || null;
+            syncUpscorePlayerUi();
+          });
+          upscoreSlider.addEventListener("input", renderUpscoreResults);
+"""
+
+
 def _build_bingo_board_interactive_html(
     *,
     cells_html: list[str],
@@ -5430,8 +6194,52 @@ def _build_bingo_board_interactive_html(
             <button type="button" class="bingo-chart-modal-backdrop" aria-label="Close chart leaderboard"></button>
             <div class="bingo-chart-modal-panel" role="dialog" aria-modal="true" aria-labelledby="bingo-chart-modal-title">
               <button type="button" class="bingo-chart-modal-close" aria-label="Close">&times;</button>
-              <div id="bingo-chart-modal-title" class="bingo-chart-modal-title"></div>
+              <div class="bingo-chart-modal-header">
+                <div id="bingo-chart-modal-title" class="bingo-chart-modal-title"></div>
+                <button type="button" class="bingo-chart-modal-upscore-btn" id="bingo-chart-upscore-btn" hidden>Upscore Calculator</button>
+              </div>
               <div class="bingo-chart-modal-subtitle"></div>
+              <div class="bingo-chart-modal-upscore-panel" id="bingo-chart-upscore-panel" aria-hidden="true">
+                <div class="bingo-chart-modal-upscore-inner">
+                  <div class="bingo-upscore-player-picker" id="bingo-upscore-player-picker">
+                    <input type="search" id="bingo-upscore-search" placeholder="Search players..." autocomplete="off" />
+                    <select id="bingo-upscore-player-select"></select>
+                  </div>
+                  <div class="bingo-upscore-player-name" id="bingo-upscore-player-name"></div>
+                  <dl class="bingo-upscore-metrics">
+                    <div>
+                      <dt>Current Score</dt>
+                      <dd id="bingo-upscore-current-score">—</dd>
+                    </div>
+                    <div>
+                      <dt>Current Score %</dt>
+                      <dd id="bingo-upscore-current-pct">—</dd>
+                    </div>
+                  </dl>
+                  <div class="bingo-upscore-slider-label">
+                    <span>Target Score %</span>
+                    <span id="bingo-upscore-target-pct">—</span>
+                  </div>
+                  <div class="bingo-upscore-slider-wrap">
+                    <div class="bingo-upscore-slider-marker" id="bingo-upscore-lead-marker" hidden></div>
+                    <input type="range" class="bingo-upscore-slider" id="bingo-upscore-slider" min="0" max="100" step="0.01" />
+                  </div>
+                  <div class="bingo-upscore-results">
+                    <dl class="bingo-upscore-required-row">
+                      <div class="bingo-upscore-required-item">
+                        <dt>Required Score</dt>
+                        <dd id="bingo-upscore-required-score">—</dd>
+                      </div>
+                      <div class="bingo-upscore-required-item">
+                        <dt>Placement</dt>
+                        <dd id="bingo-upscore-required-placement">—</dd>
+                      </div>
+                    </dl>
+                    <div class="bingo-upscore-changes-title">Point Changes</div>
+                    <div class="bingo-upscore-changes" id="bingo-upscore-point-changes"></div>
+                  </div>
+                </div>
+              </div>
               <div class="bingo-chart-modal-body"></div>
             </div>
           </div>
@@ -5463,6 +6271,7 @@ def _build_bingo_board_interactive_html(
           let subtitleTimer = null;
           let closeTimer = null;
           const MODAL_ANIM_MS = 220;
+          {_BINGO_UPSCORE_CALCULATOR_JS}
 
           function closeProofModal() {{
             proofModal.classList.remove("is-open");
@@ -5542,6 +6351,7 @@ def _build_bingo_board_interactive_html(
               subtitleTimer = null;
             }}
             bodyEl.innerHTML = "";
+            resetUpscorePanel();
             if (lastFocused && typeof lastFocused.focus === "function") {{
               lastFocused.focus();
             }}
@@ -5578,6 +6388,7 @@ def _build_bingo_board_interactive_html(
               subtitleTimer = setInterval(updateSubtitle, 1000);
             }}
             bodyEl.innerHTML = data.table_html;
+            initUpscore(data);
             modal.classList.add("is-open");
             modal.setAttribute("aria-hidden", "false");
             closeEl.focus();
@@ -5836,7 +6647,7 @@ def _render_bingo_chart_leaderboard_table_html(
                 f"</td>"
             )
         rows.append(
-            f'<tr class="{row_class.strip()}">'
+            f'<tr class="{row_class.strip()}" data-player-id="{html.escape(entry.player_id)}">'
             f'<td class="bingo-chart-modal-rank">{rank}</td>'
             f'<td class="bingo-chart-modal-player" style="color:{team_color};">'
             f"{player}</td>"
