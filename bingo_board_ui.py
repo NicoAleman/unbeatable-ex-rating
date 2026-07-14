@@ -46,6 +46,11 @@ from rating.bingo import (
     load_bingo_teams_by_ex_rating,
     submit_bingo_score,
 )
+from rating.bingo_chart_scoring import (
+    ChartPlayerPointBreakdown,
+    bingo_scoring_version,
+    compute_chart_player_point_breakdowns,
+)
 from rating.calculator import ex_accuracy_percent
 from rating.bingo_proof_storage import create_bingo_proof_signed_url
 from rating.constants import SCORE_SOURCE_IN_GAME, SCORE_SOURCE_SUBMISSION
@@ -1540,6 +1545,123 @@ _BINGO_CHART_MODAL_SCROLLBAR_CSS = """
     }
 """
 
+_BINGO_CHART_MODAL_TABLE_LAYOUT_CSS = """
+    .bingo-chart-modal-table-wrap {
+        overflow-x: auto;
+        max-width: 100%;
+    }
+    .bingo-chart-modal-table {
+        width: max-content;
+        max-width: 100%;
+        border-collapse: collapse;
+    }
+    .bingo-chart-modal-table th.bingo-chart-modal-points {
+        overflow: visible;
+    }
+"""
+
+_BINGO_CHART_MODAL_POINTS_COLUMN_CSS = """
+    .bingo-chart-modal-accuracy {
+        width: 5.75rem;
+        font-weight: 700;
+        font-variant-numeric: tabular-nums;
+        text-align: center !important;
+        white-space: nowrap;
+        color: rgba(234, 234, 234, 0.82);
+    }
+    .bingo-chart-modal-table th.bingo-chart-modal-accuracy {
+        text-align: center !important;
+    }
+    .bingo-chart-modal-points {
+        width: 7.25rem;
+        font-weight: 800;
+        font-variant-numeric: tabular-nums;
+        text-align: center !important;
+        white-space: nowrap;
+        border-left: 1px solid rgba(234, 234, 234, 0.22);
+        padding-left: 0.65rem !important;
+        padding-right: 0.35rem !important;
+    }
+    .bingo-chart-modal-table th.bingo-chart-modal-points {
+        border-left: 1px solid rgba(234, 234, 234, 0.22);
+        padding-left: 0.65rem !important;
+        padding-right: 0.35rem !important;
+        text-align: center !important;
+        text-transform: none;
+        letter-spacing: normal;
+        overflow: visible;
+    }
+    .bingo-chart-modal-points-head {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 0.35rem;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+    }
+    .bingo-chart-modal-help-wrap {
+        position: relative;
+        display: inline-flex;
+        align-items: center;
+        text-transform: none;
+        letter-spacing: normal;
+    }
+    .bingo-chart-modal-help-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 1rem;
+        height: 1rem;
+        padding: 0;
+        border: 1px solid rgba(234, 234, 234, 0.28);
+        border-radius: 999px;
+        background: rgba(234, 234, 234, 0.08);
+        color: rgba(234, 234, 234, 0.58);
+        font-size: 0.68rem;
+        font-weight: 800;
+        line-height: 1;
+        cursor: help;
+        text-transform: none;
+    }
+    .bingo-chart-modal-help-btn:hover,
+    .bingo-chart-modal-help-btn:focus-visible {
+        color: rgba(234, 234, 234, 0.95);
+        border-color: rgba(234, 234, 234, 0.45);
+        outline: none;
+    }
+    .bingo-chart-modal-help-tip {
+        display: none;
+        position: absolute;
+        top: calc(100% + 0.4rem);
+        right: 0;
+        left: auto;
+        transform: none;
+        width: max-content;
+        max-width: 12rem;
+        padding: 0.45rem 0.6rem;
+        border-radius: 0.45rem;
+        border: 1px solid rgba(234, 234, 234, 0.18);
+        background: #182038;
+        color: rgba(234, 234, 234, 0.92);
+        font-size: 0.72rem;
+        font-weight: 600;
+        line-height: 1.35;
+        text-transform: none;
+        letter-spacing: normal;
+        white-space: normal;
+        text-align: left;
+        box-shadow: 0 10px 24px rgba(0, 0, 0, 0.35);
+        z-index: 5;
+    }
+    .bingo-chart-modal-help-wrap.is-open .bingo-chart-modal-help-tip {
+        display: block;
+    }
+    .bingo-chart-modal-points-bonus {
+        font-weight: 600;
+        color: rgba(234, 234, 234, 0.45);
+    }
+"""
+
 _BINGO_CHART_MODAL_ANIMATION_CSS = """
     .bingo-chart-modal-overlay {
         display: flex;
@@ -1789,9 +1911,11 @@ def build_bingo_board_css() -> str:
     .bingo-chart-modal-panel {{
         position: relative;
         z-index: 1;
-        width: min(100%, 720px);
+        width: fit-content;
+        max-width: min(calc(100vw - 3rem), 40rem);
         max-height: min(80vh, 760px);
-        overflow: auto;
+        overflow-x: auto;
+        overflow-y: auto;
         background: #10162d;
         border: 1px solid rgba(234, 234, 234, 0.18);
         border-radius: 0.85rem;
@@ -1837,11 +1961,10 @@ def build_bingo_board_css() -> str:
         margin: 0 0 1rem 0;
         font-family: "Source Sans Pro", "Segoe UI", sans-serif;
     }}
-    .bingo-chart-modal-table-wrap {{
-        overflow-x: auto;
-    }}
+    {_BINGO_CHART_MODAL_TABLE_LAYOUT_CSS}
     .bingo-chart-modal-table {{
-        width: 100%;
+        width: max-content;
+        max-width: 100%;
         border-collapse: collapse;
         font-family: "Source Sans Pro", "Segoe UI", sans-serif;
         color: #eaeaea;
@@ -1867,6 +1990,11 @@ def build_bingo_board_css() -> str:
     }}
     .bingo-chart-modal-player {{
         font-weight: 700;
+        width: 11rem;
+        max-width: 11rem;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
     }}
     .bingo-chart-modal-team {{
         width: 5.5rem;
@@ -1878,6 +2006,7 @@ def build_bingo_board_css() -> str:
         font-variant-numeric: tabular-nums;
         text-align: right !important;
     }}
+    {_BINGO_CHART_MODAL_POINTS_COLUMN_CSS}
     .bingo-chart-modal-proof-col {{
         width: 2rem;
         min-width: 2rem;
@@ -2292,11 +2421,9 @@ def _bingo_scoreboard_multiplier_highlight_days(
     """Days in the multiplier row to show golden for the selected column."""
     day = int(highlight_day)
     multiplier = bingo_day_multiplier(day, day_count)
-    if multiplier == 0:
+    if multiplier <= 1:
         if _bingo_scoreboard_multiplier_label(day, day_count=day_count):
             return {day}
-        return set()
-    if multiplier <= 1:
         return set()
     start = day
     while start > 1 and bingo_day_multiplier(start - 1, day_count) == multiplier:
@@ -4535,6 +4662,8 @@ def _build_bingo_chart_modal_payload(
             ),
             "table_html": _render_bingo_chart_leaderboard_table_html(
                 entries,
+                song=chart.song,
+                difficulty=chart.difficulty,
                 highlight_player_id=highlight_player_id,
             ),
         }
@@ -5064,9 +5193,11 @@ def _bingo_board_component_css(*, cols: int, rows: int) -> str:
     .bingo-chart-modal-panel {{
         position: relative;
         z-index: 1;
-        width: min(100%, 26rem);
+        width: fit-content;
+        max-width: min(calc(100% - 3rem), 40rem);
         max-height: min(80vh, 760px);
-        overflow: auto;
+        overflow-x: auto;
+        overflow-y: auto;
         background: #10162d;
         border: 1px solid rgba(234, 234, 234, 0.18);
         border-radius: 0.85rem;
@@ -5105,8 +5236,10 @@ def _bingo_board_component_css(*, cols: int, rows: int) -> str:
         color: rgba(234, 234, 234, 0.62);
         margin: 0 0 1rem 0;
     }}
+    {_BINGO_CHART_MODAL_TABLE_LAYOUT_CSS}
     .bingo-chart-modal-table {{
-        width: 100%;
+        width: max-content;
+        max-width: 100%;
         border-collapse: collapse;
         color: #eaeaea;
     }}
@@ -5143,6 +5276,7 @@ def _bingo_board_component_css(*, cols: int, rows: int) -> str:
         font-variant-numeric: tabular-nums;
         text-align: right !important;
     }}
+    {_BINGO_CHART_MODAL_POINTS_COLUMN_CSS}
     .bingo-chart-modal-proof-col {{
         width: 2rem;
         min-width: 2rem;
@@ -5393,9 +5527,16 @@ def _build_bingo_board_interactive_html(
             root.classList.toggle("hide-lines", hideLines || hideColors);
           }}
 
+          function closeHelpTips() {{
+            bodyEl.querySelectorAll(".bingo-chart-modal-help-wrap.is-open").forEach((wrap) => {{
+              wrap.classList.remove("is-open");
+            }});
+          }}
+
           function finishCloseModal() {{
             modal.classList.remove("is-closing");
             closeTimer = null;
+            closeHelpTips();
             if (subtitleTimer !== null) {{
               clearInterval(subtitleTimer);
               subtitleTimer = null;
@@ -5465,6 +5606,22 @@ def _build_bingo_board_interactive_html(
           backdropEl.addEventListener("click", closeModal);
           closeEl.addEventListener("click", closeModal);
           bodyEl.addEventListener("click", (event) => {{
+            const helpBtn = event.target.closest(".bingo-chart-modal-help-btn");
+            if (helpBtn) {{
+              event.preventDefault();
+              event.stopPropagation();
+              const wrap = helpBtn.closest(".bingo-chart-modal-help-wrap");
+              if (!wrap) {{
+                return;
+              }}
+              const isOpen = wrap.classList.contains("is-open");
+              closeHelpTips();
+              if (!isOpen) {{
+                wrap.classList.add("is-open");
+              }}
+              return;
+            }}
+            closeHelpTips();
             const proofBtn = event.target.closest(".bingo-chart-modal-proof-btn");
             if (!proofBtn) {{
               return;
@@ -5571,9 +5728,52 @@ def _bingo_chart_proof_icon_html(entry: BingoChartLeaderboardEntry) -> str:
     return ""
 
 
+def _bingo_chart_points_header_html() -> str:
+    tip = html.escape("Score Points (+ Placement Points)")
+    return (
+        '<th class="bingo-chart-modal-points">'
+        '<span class="bingo-chart-modal-points-head">'
+        "<span>Points</span>"
+        '<span class="bingo-chart-modal-help-wrap">'
+        '<button type="button" class="bingo-chart-modal-help-btn" '
+        f'aria-label="Points format: {tip}">?</button>'
+        f'<span class="bingo-chart-modal-help-tip" role="tooltip">{tip}</span>'
+        "</span>"
+        "</span>"
+        "</th>"
+    )
+
+
+def _format_chart_ex_accuracy(
+    *,
+    song: str,
+    difficulty: str,
+    score: int,
+) -> str:
+    if int(score) <= 0:
+        return "—"
+    max_score = bingo_chart_max_score(song, difficulty)
+    if max_score is None or max_score <= 0:
+        return "—"
+    pct = ex_accuracy_percent(int(score), int(max_score))
+    return f"{pct:.2f}%"
+
+
+def _format_chart_points_cell(breakdown: ChartPlayerPointBreakdown) -> str:
+    bonus = int(breakdown.placement_bonus)
+    if bonus > 0:
+        return (
+            f"{int(breakdown.accuracy_points)} "
+            f'<span class="bingo-chart-modal-points-bonus">(+{bonus})</span>'
+        )
+    return str(int(breakdown.accuracy_points))
+
+
 def _render_bingo_chart_leaderboard_table_html(
     entries: list[BingoChartLeaderboardEntry],
     *,
+    song: str | None = None,
+    difficulty: str | None = None,
     highlight_player_id: str | None = None,
 ) -> str:
     if not entries:
@@ -5583,10 +5783,35 @@ def _render_bingo_chart_leaderboard_table_html(
             "</div>"
         )
 
+    show_points = (
+        bingo_scoring_version() == "v2"
+        and song is not None
+        and difficulty is not None
+    )
+    breakdowns: dict[str, ChartPlayerPointBreakdown] = {}
+    if show_points:
+        players = {
+            entry.player_id: (entry.team, int(entry.score)) for entry in entries
+        }
+        breakdowns = compute_chart_player_point_breakdowns(
+            song=song,
+            difficulty=difficulty,
+            players=players,
+        )
+        entries = sorted(
+            entries,
+            key=lambda entry: (
+                -int(entry.score),
+                entry.display_name.casefold(),
+            ),
+        )
+
     rows: list[str] = []
     rank = 0
     for index, entry in enumerate(entries):
-        if index == 0 or entry.score != entries[index - 1].score:
+        if show_points:
+            rank = breakdowns[entry.player_id].rank
+        elif index == 0 or entry.score != entries[index - 1].score:
             rank = index + 1
         team_color = TEAM_TEXT_COLORS.get(entry.team, "#eaeaea")
         player = html.escape(entry.display_name)
@@ -5597,15 +5822,34 @@ def _render_bingo_chart_leaderboard_table_html(
             if highlight_player_id is not None and entry.player_id == highlight_player_id
             else ""
         )
+        points_cell = ""
+        accuracy_cell = ""
+        if show_points:
+            accuracy_cell = (
+                f'<td class="bingo-chart-modal-accuracy">'
+                f"{html.escape(_format_chart_ex_accuracy(song=song, difficulty=difficulty, score=int(entry.score)))}"
+                f"</td>"
+            )
+            points_cell = (
+                f'<td class="bingo-chart-modal-points">'
+                f"{_format_chart_points_cell(breakdowns[entry.player_id])}"
+                f"</td>"
+            )
         rows.append(
             f'<tr class="{row_class.strip()}">'
             f'<td class="bingo-chart-modal-rank">{rank}</td>'
             f'<td class="bingo-chart-modal-player" style="color:{team_color};">'
             f"{player}</td>"
             f'<td class="bingo-chart-modal-score">{score}</td>'
+            f"{accuracy_cell}"
+            f"{points_cell}"
             f'<td class="bingo-chart-modal-proof-col">{proof_icon}</td>'
             "</tr>"
         )
+    accuracy_header = (
+        '<th class="bingo-chart-modal-accuracy">Max Score %</th>' if show_points else ""
+    )
+    points_header = _bingo_chart_points_header_html() if show_points else ""
     return (
         '<div class="bingo-chart-modal-table-wrap">'
         '<table class="bingo-chart-modal-table">'
@@ -5613,6 +5857,8 @@ def _render_bingo_chart_leaderboard_table_html(
         '<th class="bingo-chart-modal-rank">#</th>'
         '<th class="bingo-chart-modal-player">Player</th>'
         '<th class="bingo-chart-modal-score">Score</th>'
+        f"{accuracy_header}"
+        f"{points_header}"
         '<th class="bingo-chart-modal-proof-col" aria-label="Proof"></th>'
         "</tr></thead>"
         f"<tbody>{''.join(rows)}</tbody>"

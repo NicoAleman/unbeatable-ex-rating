@@ -9,6 +9,11 @@ import psycopg2
 import psycopg2.extras
 
 from rating.chart_levels import load_chart_rating_levels, resolve_chart_rating_level
+from rating.bingo_chart_scoring import (
+    ChartClaimScoring,
+    bingo_scoring_version,
+    compute_chart_claim_scoring,
+)
 from rating.formatting import format_song_display_name
 from rating.supabase_config import get_supabase_db_url
 
@@ -208,6 +213,34 @@ def load_bingo_teams_by_ex_rating(
     return grouped
 
 
+def _expand_v2_chart_players(
+    players: dict[str, tuple[str, int]],
+    roster: dict[str, list[BingoTeamPlayer]],
+) -> dict[str, tuple[str, int]]:
+    """Include every roster player on a chart; missing scores become 0 (70% floor in v2)."""
+    expanded = dict(players)
+    for team in TEAM_ORDER:
+        for player in roster.get(team, []):
+            expanded.setdefault(player.player_id, (player.team, 0))
+    return expanded
+
+
+def _compute_chart_claim(
+    *,
+    song: str,
+    difficulty: str,
+    players: dict[str, tuple[str, int]],
+    roster: dict[str, list[BingoTeamPlayer]] | None = None,
+) -> ChartClaimScoring:
+    if bingo_scoring_version() == "v2" and roster is not None:
+        players = _expand_v2_chart_players(players, roster)
+    return compute_chart_claim_scoring(
+        song=song,
+        difficulty=difficulty,
+        players=players,
+    )
+
+
 def load_bingo_chart_standings_data(
     *,
     start_time: datetime | None,
@@ -260,26 +293,28 @@ def load_bingo_chart_standings_data(
     except psycopg2.errors.UndefinedTable:
         return {}
 
-    player_bests: dict[tuple[str, str], dict[str, list[int]]] = {}
+    players_by_chart: dict[tuple[str, str], dict[str, tuple[str, int]]] = {}
     for row in rows:
         key = (str(row["song"]), str(row["difficulty"]))
         team = str(row["team"])
-        by_team = player_bests.setdefault(
-            key, {team_name: [] for team_name in TEAM_ORDER}
-        )
-        if team not in by_team:
-            by_team[team] = []
-        by_team[team].append(int(row["best_score"]))
+        player_id = str(row["player_id"])
+        score = int(row["best_score"])
+        players_by_chart.setdefault(key, {})[player_id] = (team, score)
+
+    roster: dict[str, list[BingoTeamPlayer]] | None = None
+    if bingo_scoring_version() == "v2":
+        roster = load_bingo_teams_by_ex_rating(db_url)
 
     result: dict[tuple[str, str], tuple[dict[str, int], dict[str, list[int]]]] = {}
-    for key, by_team in player_bests.items():
-        totals = {
-            team: int(sum(scores)) for team, scores in by_team.items()
-        }
-        for team in TEAM_ORDER:
-            totals.setdefault(team, 0)
-            by_team.setdefault(team, [])
-        result[key] = (totals, by_team)
+    for key, players in players_by_chart.items():
+        song, difficulty = key
+        claim = _compute_chart_claim(
+            song=song,
+            difficulty=difficulty,
+            players=players,
+            roster=roster,
+        )
+        result[key] = (claim.team_totals, claim.player_points_by_team)
     return result
 
 
@@ -478,22 +513,25 @@ def load_bingo_team_totals_by_chart(
 
 def _leader_for_chart_bests(
     player_bests: dict[str, tuple[str, int]],
+    *,
+    song: str,
+    difficulty: str,
+    roster: dict[str, list[BingoTeamPlayer]] | None = None,
 ) -> str | None:
     """player_bests maps player_id -> (team, best_score)."""
-    by_team_scores: dict[str, list[int]] = {team: [] for team in TEAM_ORDER}
-    for team, score in player_bests.values():
-        if team not in by_team_scores:
-            by_team_scores[team] = []
-        by_team_scores[team].append(int(score))
-    totals = {team: int(sum(scores)) for team, scores in by_team_scores.items()}
-    for team in TEAM_ORDER:
-        totals.setdefault(team, 0)
-        by_team_scores.setdefault(team, [])
-    return pick_leading_team(totals, by_team_scores)
+    claim = _compute_chart_claim(
+        song=song,
+        difficulty=difficulty,
+        players=player_bests,
+        roster=roster,
+    )
+    return pick_leading_team(claim.team_totals, claim.player_points_by_team)
 
 
 def _standings_maps_from_player_bests(
     bests_by_chart: dict[tuple[str, str], dict[str, tuple[str, int]]],
+    *,
+    roster: dict[str, list[BingoTeamPlayer]] | None = None,
 ) -> tuple[
     dict[tuple[str, str], dict[str, int]],
     dict[tuple[str, str], dict[str, list[int]]],
@@ -501,15 +539,15 @@ def _standings_maps_from_player_bests(
     totals: dict[tuple[str, str], dict[str, int]] = {}
     player_bests: dict[tuple[str, str], dict[str, list[int]]] = {}
     for key, players in bests_by_chart.items():
-        by_team: dict[str, list[int]] = {team: [] for team in TEAM_ORDER}
-        for team, score in players.values():
-            if team not in by_team:
-                by_team[team] = []
-            by_team[team].append(int(score))
-        for team in TEAM_ORDER:
-            by_team.setdefault(team, [])
-        totals[key] = {team: int(sum(scores)) for team, scores in by_team.items()}
-        player_bests[key] = by_team
+        song, difficulty = key
+        claim = _compute_chart_claim(
+            song=song,
+            difficulty=difficulty,
+            players=players,
+            roster=roster,
+        )
+        totals[key] = claim.team_totals
+        player_bests[key] = claim.player_points_by_team
     return totals, player_bests
 
 
@@ -654,6 +692,9 @@ def load_bingo_square_claim_feed(
     chart_by_key = {
         (chart.song, chart.difficulty): chart for chart in board_charts
     }
+    roster: dict[str, list[BingoTeamPlayer]] | None = None
+    if bingo_scoring_version() == "v2":
+        roster = load_bingo_teams_by_ex_rating(db_url)
     if not chart_by_key:
         return []
 
@@ -716,7 +757,9 @@ def load_bingo_square_claim_feed(
             column=chart.column,
             team=team,
         )
-        prev_totals, prev_best_lists = _standings_maps_from_player_bests(bests_by_chart)
+        prev_totals, prev_best_lists = _standings_maps_from_player_bests(
+            bests_by_chart, roster=roster
+        )
         prev_groups = group_claim_owners(board_charts, prev_totals, prev_best_lists)
         prev_group_owner = (
             prev_groups.get(int(chart.group)) if chart.group is not None else None
@@ -724,7 +767,12 @@ def load_bingo_square_claim_feed(
 
         player_bests[player_id] = (team, score)
         prev_leader = leaders[key]
-        new_leader = _leader_for_chart_bests(player_bests)
+        new_leader = _leader_for_chart_bests(
+            player_bests,
+            song=chart.song,
+            difficulty=chart.difficulty,
+            roster=roster,
+        )
         leaders[key] = new_leader
 
         if new_leader is None or new_leader == prev_leader:
@@ -741,7 +789,9 @@ def load_bingo_square_claim_feed(
             column=chart.column,
             team=team,
         )
-        new_totals, new_best_lists = _standings_maps_from_player_bests(bests_by_chart)
+        new_totals, new_best_lists = _standings_maps_from_player_bests(
+            bests_by_chart, roster=roster
+        )
         new_groups = group_claim_owners(board_charts, new_totals, new_best_lists)
         new_group_owner = (
             new_groups.get(int(chart.group)) if chart.group is not None else None
