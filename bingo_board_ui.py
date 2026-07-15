@@ -95,6 +95,11 @@ TEAM_ACTIVITY_TINTS = {
     "Grace": "rgba(255, 122, 132, 0.11)",
     "Rest": "rgba(94, 224, 154, 0.11)",
 }
+TEAM_PLAYER_SCORES_ROW_BG = {
+    "Eve": "#0c1528",
+    "Grace": "#1a1016",
+    "Rest": "#0c1814",
+}
 # bingo_charts."group" → outline color (1=Yellow, 2=Cyan, 3=Purple).
 GROUP_BORDER_COLORS = {
     1: "#f5d547",
@@ -398,6 +403,8 @@ def _player_chart_placement_rank(
     }
     if player_id not in players:
         return None
+    if int(players[player_id][1]) <= 0:
+        return None
     breakdowns = compute_chart_player_point_breakdowns(
         song=chart.song,
         difficulty=chart.difficulty,
@@ -451,6 +458,11 @@ def _player_footer_html(label: str) -> str:
 
 def _render_bingo_player_view_controls(
     teams: dict[str, list[BingoTeamPlayer]],
+    *,
+    board_charts: list[BingoChart] | None = None,
+    leaderboard_by_chart: dict[tuple[str, str], list[BingoChartLeaderboardEntry]]
+    | None = None,
+    leaders_by_chart: dict[tuple[str, str], str | None] | None = None,
 ) -> BingoTeamPlayer | None:
     """Search/select a player to enable the Player Board view."""
     players = _flatten_bingo_players(teams)
@@ -479,6 +491,17 @@ def _render_bingo_player_view_controls(
         .st-key-bingo_player_view_shell label[data-testid="stWidgetLabel"] {
             font-size: 0.95rem !important;
             margin-bottom: 0.2rem !important;
+        }
+        .st-key-bingo_player_view_shell [data-testid="stCustomComponentV1"] {
+            margin: 0.35rem auto 0 !important;
+            padding: 0 !important;
+            width: 100% !important;
+            max-width: 100% !important;
+        }
+        .st-key-bingo_player_view_shell iframe {
+            width: 100% !important;
+            max-width: 100% !important;
+            border: none !important;
         }
         .bingo-player-view-marker { display: none; }
         </style>
@@ -542,6 +565,19 @@ def _render_bingo_player_view_controls(
             if previous_player_id != selected_player.player_id:
                 st.session_state["bingo_auto_enable_player_board"] = True
             st.session_state["bingo_view_player_id"] = selected_player.player_id
+        if (
+            selected_player is not None
+            and board_charts
+            and leaderboard_by_chart is not None
+            and leaders_by_chart is not None
+        ):
+            _render_bingo_player_scores_launch(
+                player=selected_player,
+                board_charts=board_charts,
+                teams=teams,
+                leaderboard_by_chart=leaderboard_by_chart,
+                leaders_by_chart=leaders_by_chart,
+            )
         return selected_player
 
 
@@ -1667,6 +1703,80 @@ _BINGO_CHART_MODAL_TABLE_LAYOUT_CSS = """
     }
     .bingo-chart-modal-table th.bingo-chart-modal-points {
         overflow: visible;
+    }
+"""
+
+_BINGO_PLAYER_SCORES_TABLE_CSS = """
+    .bingo-player-scores-modal .bingo-chart-modal-panel {
+        width: min(100%, 40rem);
+    }
+    .bingo-player-scores-table {
+        table-layout: fixed;
+        width: 100%;
+        max-width: 100%;
+    }
+    .bingo-player-scores-table .bingo-player-scores-col-chart {
+        width: auto;
+    }
+    .bingo-player-scores-table .bingo-player-scores-col-score {
+        width: 8.75rem;
+    }
+    .bingo-player-scores-table .bingo-player-scores-col-pct {
+        width: 5.25rem;
+    }
+    .bingo-player-scores-table .bingo-player-scores-col-placement {
+        width: 7.25rem;
+    }
+    .bingo-player-scores-table .bingo-player-scores-chart {
+        overflow: hidden;
+        max-width: 0;
+    }
+    .bingo-player-scores-chart-name {
+        font-weight: 700;
+        color: #eaeaea;
+        line-height: 1.2;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    .bingo-player-scores-chart-diff {
+        margin-top: 0.12rem;
+        font-size: 0.82rem;
+        font-weight: 600;
+        color: rgba(234, 234, 234, 0.62);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    .bingo-player-scores-table .bingo-chart-modal-score {
+        text-align: right;
+        font-weight: 800;
+        font-variant-numeric: tabular-nums;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    .bingo-player-scores-table th.bingo-player-scores-pct,
+    .bingo-player-scores-table th.bingo-player-scores-placement {
+        text-align: center !important;
+        font-weight: 700;
+        font-variant-numeric: tabular-nums;
+        white-space: nowrap;
+        padding-left: 0.35rem;
+        padding-right: 0.35rem;
+        letter-spacing: 0.02em;
+    }
+    .bingo-player-scores-table td.bingo-player-scores-pct,
+    .bingo-player-scores-table td.bingo-player-scores-placement {
+        text-align: center !important;
+        font-weight: 700;
+        font-variant-numeric: tabular-nums;
+        white-space: nowrap;
+        padding-left: 0.35rem;
+        padding-right: 0.35rem;
+    }
+    .bingo-player-scores-table th.bingo-chart-modal-score {
+        text-align: right;
     }
 """
 
@@ -4209,6 +4319,461 @@ def _render_bingo_chart_completions_table_html(
         '<div class="bingo-completions-teams">'
         f"{''.join(team_blocks)}"
         "</div>"
+    )
+
+
+def _render_bingo_player_scores_table_html(
+    *,
+    player: BingoTeamPlayer,
+    board_charts: list[BingoChart],
+    teams: dict[str, list[BingoTeamPlayer]],
+    leaderboard_by_chart: dict[tuple[str, str], list[BingoChartLeaderboardEntry]],
+    leaders_by_chart: dict[tuple[str, str], str | None],
+) -> str:
+    if not board_charts:
+        return (
+            '<div class="bingo-chart-modal-empty">'
+            "No charts are on the board yet."
+            "</div>"
+        )
+
+    sortable_rows: list[
+        tuple[tuple[int, str], BingoChart, int, str, str, str, str | None]
+    ] = []
+    for chart in board_charts:
+        chart_key = (chart.song, chart.difficulty)
+        score = _player_chart_score(
+            chart,
+            player_id=player.player_id,
+            leaderboard_by_chart=leaderboard_by_chart,
+        )
+        rank = _player_chart_placement_rank(
+            chart,
+            player_id=player.player_id,
+            leaderboard_by_chart=leaderboard_by_chart,
+            roster=teams,
+        )
+        owner_team = leaders_by_chart.get(chart_key)
+        if score > 0:
+            max_score = bingo_chart_max_score(chart.song, chart.difficulty)
+            if max_score is not None and max_score > 0:
+                score_pct = f"{ex_accuracy_percent(score, max_score):.2f}%"
+            else:
+                score_pct = "—"
+            score_text = format_leader_score(score)
+            placement_text = f"{_ordinal_rank(rank)} Place" if rank is not None else "—"
+            sort_rank = rank if rank is not None else 9999
+        else:
+            score_pct = "—"
+            score_text = "Not Played"
+            placement_text = "Not Played"
+            sort_rank = 9999
+        sortable_rows.append(
+            (
+                (sort_rank, chart.display_name.casefold()),
+                chart,
+                score,
+                score_text,
+                score_pct,
+                placement_text,
+                owner_team,
+            )
+        )
+
+    sortable_rows.sort(key=lambda item: item[0])
+    rows: list[str] = []
+    for _sort_key, chart, _score, score_text, score_pct, placement_text, owner_team in (
+        sortable_rows
+    ):
+        row_bg = TEAM_PLAYER_SCORES_ROW_BG.get(owner_team or "", "")
+        row_style = f' style="background:{html.escape(row_bg)};"' if row_bg else ""
+        rows.append(
+            f"<tr{row_style}>"
+            f'<td class="bingo-player-scores-chart">'
+            f'<div class="bingo-player-scores-chart-name">'
+            f"{html.escape(chart.display_name)}</div>"
+            f'<div class="bingo-player-scores-chart-diff">'
+            f"{html.escape(_difficulty_label(chart.difficulty, chart.level))}"
+            f"</div></td>"
+            f'<td class="bingo-chart-modal-score">'
+            f"{html.escape(score_text)}</td>"
+            f'<td class="bingo-player-scores-pct">{html.escape(score_pct)}</td>'
+            f'<td class="bingo-player-scores-placement">'
+            f"{html.escape(placement_text)}</td>"
+            "</tr>"
+        )
+
+    return (
+        '<div class="bingo-chart-modal-table-wrap">'
+        '<table class="bingo-chart-modal-table bingo-player-scores-table">'
+        "<colgroup>"
+        '<col class="bingo-player-scores-col-chart">'
+        '<col class="bingo-player-scores-col-score">'
+        '<col class="bingo-player-scores-col-pct">'
+        '<col class="bingo-player-scores-col-placement">'
+        "</colgroup>"
+        "<thead><tr>"
+        '<th class="bingo-player-scores-chart">Chart</th>'
+        '<th class="bingo-chart-modal-score">Score</th>'
+        '<th class="bingo-player-scores-pct">Score %</th>'
+        '<th class="bingo-player-scores-placement">Placement</th>'
+        "</tr></thead>"
+        f"<tbody>{''.join(rows)}</tbody>"
+        "</table></div>"
+    )
+
+
+def _build_bingo_player_scores_overlay_document(
+    *,
+    player: BingoTeamPlayer,
+    table_html: str,
+) -> str:
+    player_name = html.escape(player.display_name)
+    team_color = html.escape(TEAM_TEXT_COLORS.get(player.team, "#eaeaea"))
+    return f"""<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+html, body {{
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    background: transparent;
+    font-family: "Source Sans Pro", "Segoe UI", sans-serif;
+}}
+{_BINGO_CHART_MODAL_ANIMATION_CSS}
+{_BINGO_CHART_MODAL_SCROLLBAR_CSS}
+{_BINGO_PLAYER_SCORES_TABLE_CSS}
+.bingo-chart-modal-overlay {{
+    position: fixed;
+    inset: 0;
+    z-index: 1;
+    align-items: center;
+    justify-content: center;
+    padding: 1.5rem;
+    box-sizing: border-box;
+}}
+.bingo-chart-modal-backdrop {{
+    position: absolute;
+    inset: 0;
+    border: none;
+    background: rgba(4, 8, 20, 0.72);
+    cursor: pointer;
+}}
+.bingo-chart-modal-panel {{
+    position: relative;
+    z-index: 1;
+    width: min(100%, 960px);
+    max-height: min(80vh, 760px);
+    overflow: auto;
+    background: #10162d;
+    border: 1px solid rgba(234, 234, 234, 0.18);
+    border-radius: 0.85rem;
+    box-shadow: 0 24px 64px rgba(0, 0, 0, 0.45);
+    padding: 1.25rem 1.25rem 1.1rem;
+    box-sizing: border-box;
+}}
+.bingo-chart-modal-close {{
+    position: absolute;
+    top: 0.65rem;
+    right: 0.75rem;
+    border: none;
+    background: transparent;
+    color: rgba(234, 234, 234, 0.72);
+    font-size: 1.65rem;
+    line-height: 1;
+    cursor: pointer;
+    padding: 0.15rem 0.35rem;
+}}
+.bingo-chart-modal-close:hover {{
+    color: #ffffff;
+}}
+.bingo-chart-modal-title {{
+    font-size: 1.35rem;
+    font-weight: 800;
+    color: #f5f5f5;
+    margin: 0 2rem 0.2rem 0;
+    line-height: 1.25;
+}}
+.bingo-chart-modal-subtitle {{
+    font-size: 0.95rem;
+    font-weight: 700;
+    margin: 0 0 0.85rem;
+}}
+.bingo-chart-modal-table-wrap {{
+    overflow-x: auto;
+}}
+.bingo-chart-modal-table {{
+    width: 100%;
+    border-collapse: collapse;
+    color: #eaeaea;
+}}
+.bingo-chart-modal-table th,
+.bingo-chart-modal-table td {{
+    padding: 0.55rem 0.75rem;
+    border-bottom: 1px solid rgba(234, 234, 234, 0.1);
+    text-align: left;
+    vertical-align: middle;
+}}
+.bingo-chart-modal-table th {{
+    font-size: 0.82rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: rgba(234, 234, 234, 0.62);
+}}
+.bingo-chart-modal-score {{
+    text-align: right;
+    font-weight: 800;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}}
+.bingo-chart-modal-empty {{
+    color: rgba(234, 234, 234, 0.72);
+    font-size: 0.95rem;
+    padding: 0.5rem 0;
+}}
+</style>
+</head>
+<body>
+<div id="bingo-player-scores-modal" class="bingo-chart-modal-overlay bingo-player-scores-modal is-open" aria-hidden="false">
+  <button type="button" class="bingo-chart-modal-backdrop" aria-label="Close player scores"></button>
+  <div class="bingo-chart-modal-panel" role="dialog" aria-modal="true" aria-labelledby="bingo-player-scores-title">
+    <button type="button" class="bingo-chart-modal-close" aria-label="Close">&times;</button>
+    <div id="bingo-player-scores-title" class="bingo-chart-modal-title">Player Scores</div>
+    <div class="bingo-chart-modal-subtitle" style="color:{team_color};">{player_name}</div>
+    <div class="bingo-chart-modal-body">{table_html}</div>
+  </div>
+</div>
+<script>
+(function () {{
+  function requestClose() {{
+    try {{
+      const host = window.parent;
+      if (host && typeof host.__bingoClosePlayerScoresOverlay === "function") {{
+        host.__bingoClosePlayerScoresOverlay();
+        return;
+      }}
+    }} catch (error) {{}}
+    window.parent.postMessage("bingo-player-scores-close", "*");
+  }}
+  document.querySelector(".bingo-chart-modal-backdrop").addEventListener("click", requestClose);
+  document.querySelector(".bingo-chart-modal-close").addEventListener("click", requestClose);
+  document.addEventListener("keydown", function (event) {{
+    if (event.key === "Escape") {{
+      requestClose();
+    }}
+  }});
+  document.querySelector(".bingo-chart-modal-close").focus();
+}})();
+</script>
+</body>
+</html>"""
+
+
+def _render_bingo_player_scores_launch(
+    *,
+    player: BingoTeamPlayer,
+    board_charts: list[BingoChart],
+    teams: dict[str, list[BingoTeamPlayer]],
+    leaderboard_by_chart: dict[tuple[str, str], list[BingoChartLeaderboardEntry]],
+    leaders_by_chart: dict[tuple[str, str], str | None],
+) -> None:
+    table_html = _render_bingo_player_scores_table_html(
+        player=player,
+        board_charts=board_charts,
+        teams=teams,
+        leaderboard_by_chart=leaderboard_by_chart,
+        leaders_by_chart=leaders_by_chart,
+    )
+    overlay_doc = _build_bingo_player_scores_overlay_document(
+        player=player,
+        table_html=table_html,
+    )
+    overlay_doc_json = json.dumps(overlay_doc).replace("</", "<\\/")
+
+    components.html(
+        f"""
+        <button type="button" class="bingo-player-scores-open-btn" id="bingo-player-scores-open">
+          View Scores
+        </button>
+        <style>
+          html, body {{
+            margin: 0;
+            padding: 0;
+            background: transparent !important;
+            overflow: hidden;
+          }}
+          .bingo-player-scores-open-btn {{
+            display: block;
+            margin: 0 auto;
+            padding: 0.55rem 1.15rem;
+            border-radius: 0.55rem;
+            border: 1px solid rgba(234, 234, 234, 0.22);
+            background: rgba(16, 22, 45, 0.92);
+            color: rgba(245, 245, 245, 0.96);
+            font-family: "Source Sans Pro", "Segoe UI", sans-serif;
+            font-size: 1rem;
+            font-weight: 700;
+            cursor: pointer;
+            line-height: 1.2;
+          }}
+          .bingo-player-scores-open-btn:hover {{
+            background: rgba(24, 32, 58, 0.98);
+            border-color: rgba(234, 234, 234, 0.32);
+          }}
+        </style>
+        <script>
+        (function () {{
+          const parentWin = window.parent;
+          const parentDoc = parentWin.document;
+          const overlayDoc = {overlay_doc_json};
+
+          parentWin.__bingoClosePlayerScoresOverlay = function () {{
+            const frame = parentDoc.getElementById("bingo-player-scores-overlay-frame");
+            if (frame) {{
+              frame.style.display = "none";
+              frame.setAttribute("aria-hidden", "true");
+            }}
+            if (parentWin.__bingoPlayerScoresIframeObserver) {{
+              parentWin.__bingoPlayerScoresIframeObserver.disconnect();
+              parentWin.__bingoPlayerScoresIframeObserver = null;
+            }}
+            parentDoc.querySelectorAll("iframe").forEach(function (node) {{
+              if (node.id === "bingo-player-scores-overlay-frame") {{
+                return;
+              }}
+              if (node.dataset.bingoPlayerScoresPointerBlocked === "1") {{
+                node.style.pointerEvents = node.dataset.bingoPlayerScoresPrevPointerEvents || "";
+                delete node.dataset.bingoPlayerScoresPointerBlocked;
+                delete node.dataset.bingoPlayerScoresPrevPointerEvents;
+              }}
+            }});
+            if (parentWin.__bingoPlayerScoresEscapeListener) {{
+              parentDoc.removeEventListener(
+                "keydown",
+                parentWin.__bingoPlayerScoresEscapeListener,
+                true
+              );
+              parentWin.__bingoPlayerScoresEscapeListener = null;
+            }}
+          }};
+
+          parentWin.__bingoBlockPlayerScoresOverlayInterference = function () {{
+            if (parentWin.__bingoPlayerScoresOverlayBusy) {{
+              return;
+            }}
+            parentWin.__bingoPlayerScoresOverlayBusy = true;
+            try {{
+              parentDoc.querySelectorAll("iframe").forEach(function (node) {{
+                if (node.id === "bingo-player-scores-overlay-frame") {{
+                  return;
+                }}
+                if (node.dataset.bingoPlayerScoresPointerBlocked === "1") {{
+                  return;
+                }}
+                node.dataset.bingoPlayerScoresPointerBlocked = "1";
+                node.dataset.bingoPlayerScoresPrevPointerEvents = node.style.pointerEvents || "";
+                node.style.pointerEvents = "none";
+              }});
+              const frame = parentDoc.getElementById("bingo-player-scores-overlay-frame");
+              if (frame && parentDoc.body.lastElementChild !== frame) {{
+                parentDoc.body.appendChild(frame);
+              }}
+              if (frame) {{
+                frame.style.display = "block";
+                frame.style.pointerEvents = "auto";
+                frame.style.zIndex = "2147483647";
+              }}
+            }} finally {{
+              parentWin.__bingoPlayerScoresOverlayBusy = false;
+            }}
+          }};
+
+          parentWin.__bingoOpenPlayerScoresOverlay = function (nextOverlayDoc) {{
+            const staleModal = parentDoc.getElementById("bingo-player-scores-modal");
+            if (staleModal) {{
+              staleModal.remove();
+            }}
+            let frame = parentDoc.getElementById("bingo-player-scores-overlay-frame");
+            if (!frame) {{
+              frame = parentDoc.createElement("iframe");
+              frame.id = "bingo-player-scores-overlay-frame";
+              frame.setAttribute("title", "Player Scores");
+              frame.setAttribute("aria-hidden", "true");
+              frame.style.cssText =
+                "position:fixed;inset:0;width:100%;height:100%;border:none;z-index:2147483647;background:transparent;display:none;pointer-events:auto;";
+            }}
+            parentDoc.body.appendChild(frame);
+            frame.srcdoc = nextOverlayDoc;
+            frame.style.display = "block";
+            frame.style.pointerEvents = "auto";
+            frame.setAttribute("aria-hidden", "false");
+            parentWin.__bingoBlockPlayerScoresOverlayInterference();
+            if (parentWin.__bingoPlayerScoresIframeObserver) {{
+              parentWin.__bingoPlayerScoresIframeObserver.disconnect();
+            }}
+            parentWin.__bingoPlayerScoresIframeObserver = new MutationObserver(function () {{
+              parentWin.__bingoBlockPlayerScoresOverlayInterference();
+            }});
+            parentWin.__bingoPlayerScoresIframeObserver.observe(parentDoc.body, {{
+              childList: true,
+              subtree: true,
+            }});
+            if (parentWin.__bingoPlayerScoresEscapeListener) {{
+              parentDoc.removeEventListener(
+                "keydown",
+                parentWin.__bingoPlayerScoresEscapeListener,
+                true
+              );
+            }}
+            parentWin.__bingoPlayerScoresEscapeListener = function (event) {{
+              if (event.key !== "Escape") {{
+                return;
+              }}
+              const activeFrame = parentDoc.getElementById("bingo-player-scores-overlay-frame");
+              if (!activeFrame || activeFrame.style.display === "none") {{
+                return;
+              }}
+              parentWin.__bingoClosePlayerScoresOverlay();
+            }};
+            parentDoc.addEventListener(
+              "keydown",
+              parentWin.__bingoPlayerScoresEscapeListener,
+              true
+            );
+          }};
+
+          if (parentWin.__bingoPlayerScoresMessageListener) {{
+            parentWin.removeEventListener("message", parentWin.__bingoPlayerScoresMessageListener);
+          }}
+          parentWin.__bingoPlayerScoresMessageListener = function (event) {{
+            if (event.data !== "bingo-player-scores-close") {{
+              return;
+            }}
+            const frame = parentDoc.getElementById("bingo-player-scores-overlay-frame");
+            if (!frame || frame.style.display === "none") {{
+              return;
+            }}
+            if (event.source && frame.contentWindow && event.source !== frame.contentWindow) {{
+              return;
+            }}
+            parentWin.__bingoClosePlayerScoresOverlay();
+          }};
+          parentWin.addEventListener("message", parentWin.__bingoPlayerScoresMessageListener);
+
+          const openBtn = document.getElementById("bingo-player-scores-open");
+          if (openBtn) {{
+            openBtn.onclick = function () {{
+              parentWin.__bingoOpenPlayerScoresOverlay(overlayDoc);
+            }};
+          }}
+        }})();
+        </script>
+        """,
+        height=52,
+        scrolling=False,
     )
 
 
@@ -7006,16 +7571,24 @@ def _render_bingo_board_fragment(
 
     standings_by_coord: dict[tuple[int, int], BingoCellStanding] = {}
     leaders_by_coord: dict[tuple[int, int], str | None] = {}
+    leaders_by_chart: dict[tuple[str, str], str | None] = {}
     for chart in charts:
         standing = build_cell_standing(chart, totals, player_bests)
         standings_by_coord[(chart.row, chart.column)] = standing
         leaders_by_coord[(chart.row, chart.column)] = standing.leader
+        leaders_by_chart[(chart.song, chart.difficulty)] = standing.leader
     line_segments = _bingo_line_segments_by_cell(
         leaders_by_coord, rows=rows, cols=cols
     )
 
     teams = _cached_bingo_teams()
-    view_player = _render_bingo_player_view_controls(teams)
+    board_charts = bingo_charts_on_board(charts, width)
+    view_player = _render_bingo_player_view_controls(
+        teams,
+        board_charts=board_charts,
+        leaderboard_by_chart=leaderboard_by_chart,
+        leaders_by_chart=leaders_by_chart,
+    )
 
     for row in range(rows):
         for col in range(cols):
