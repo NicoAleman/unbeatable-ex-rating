@@ -535,9 +535,11 @@ def _render_bingo_player_view_controls(
         )
         if player_needle:
             player_matches = player_matches[:BINGO_SEARCH_LIMIT]
+        player_matches = _ensure_view_player_in_select_matches(players, player_matches)
         player_options = [BINGO_PLAYER_SELECT_PLACEHOLDER] + [
             _bingo_player_option_label(player) for player in player_matches
         ]
+        _presync_player_select_from_view_id(teams, player_options=player_options)
         with select_col:
             if player_needle:
                 _auto_select_if_single_match(
@@ -557,14 +559,24 @@ def _render_bingo_player_view_controls(
             players,
             option_label=selected_option,
         )
-        previous_player_id = st.session_state.get("bingo_view_player_id")
-        if selected_player is None:
+        saved_player_id = st.session_state.get("bingo_view_player_id")
+        if selected_option == BINGO_PLAYER_SELECT_PLACEHOLDER:
             st.session_state.pop("bingo_view_player_id", None)
             st.session_state.pop("bingo_auto_enable_player_board", None)
-        else:
-            if previous_player_id != selected_player.player_id:
+            selected_player = None
+        elif selected_player is not None:
+            if saved_player_id != selected_player.player_id:
                 st.session_state["bingo_auto_enable_player_board"] = True
             st.session_state["bingo_view_player_id"] = selected_player.player_id
+        elif saved_player_id:
+            selected_player = _resolve_bingo_view_player(teams)
+            if selected_player is not None:
+                label = _bingo_player_option_label(selected_player)
+                if label in player_options:
+                    st.session_state["bingo-board-player-select"] = label
+            else:
+                st.session_state.pop("bingo_view_player_id", None)
+                st.session_state.pop("bingo_auto_enable_player_board", None)
         if (
             selected_player is not None
             and board_charts
@@ -3832,6 +3844,39 @@ def _find_bingo_player(
         if _bingo_player_option_label(player) == option_label:
             return player
     return None
+
+
+def _ensure_view_player_in_select_matches(
+    players: list[BingoTeamPlayer],
+    player_matches: list[BingoTeamPlayer],
+) -> list[BingoTeamPlayer]:
+    """Keep the active view player in the select options after refresh/filtering."""
+    player_id = st.session_state.get("bingo_view_player_id")
+    if not player_id:
+        return player_matches
+    if any(player.player_id == player_id for player in player_matches):
+        return player_matches
+    for player in players:
+        if player.player_id == player_id:
+            merged = list(player_matches)
+            merged.append(player)
+            merged.sort(key=lambda entry: entry.display_name.casefold())
+            return merged
+    return player_matches
+
+
+def _presync_player_select_from_view_id(
+    teams: dict[str, list[BingoTeamPlayer]],
+    *,
+    player_options: list[str],
+) -> None:
+    """Restore selectbox state from bingo_view_player_id before the widget renders."""
+    saved_player = _resolve_bingo_view_player(teams)
+    if saved_player is None:
+        return
+    label = _bingo_player_option_label(saved_player)
+    if label in player_options:
+        st.session_state["bingo-board-player-select"] = label
 
 
 def _resolve_bingo_view_player(
@@ -7589,6 +7634,8 @@ def _render_bingo_board_fragment(
         leaderboard_by_chart=leaderboard_by_chart,
         leaders_by_chart=leaders_by_chart,
     )
+    if view_player is None:
+        view_player = _resolve_bingo_view_player(teams)
 
     for row in range(rows):
         for col in range(cols):
