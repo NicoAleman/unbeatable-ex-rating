@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import base64
 import html
 import json
 import time
 from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
+from functools import lru_cache
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import streamlit as st
@@ -100,6 +103,9 @@ GROUP_BORDER_COLORS = {
 }
 DEFAULT_CELL_BORDER = "1px solid rgba(234, 234, 234, 0.16)"
 GROUP_BORDER_WIDTH = "3px"
+REST_CLAIMED_WATERMARK_PATH = (
+    Path(__file__).resolve().parent / "assets" / "bingo" / "rest-claimed-watermark.png"
+)
 TEAM_CLAIM_BORDER_WIDTH = "3px"
 
 
@@ -1335,6 +1341,30 @@ def _cell_background(standing: BingoCellStanding) -> str:
     return TEAM_CELL_BACKGROUNDS.get(standing.leader, BINGO_CELL_BG)
 
 
+@lru_cache(maxsize=1)
+def _rest_claimed_watermark_data_url() -> str:
+    encoded = base64.b64encode(REST_CLAIMED_WATERMARK_PATH.read_bytes()).decode("ascii")
+    return f"url(data:image/png;base64,{encoded})"
+
+
+def _bingo_rest_claimed_watermark_css() -> str:
+    image = _rest_claimed_watermark_data_url()
+    return f"""
+    .bingo-cell--team-rest::before {{
+        content: "";
+        position: absolute;
+        inset: 0;
+        z-index: 1;
+        pointer-events: none;
+        background: {image} center / contain no-repeat;
+        opacity: 0.02;
+    }}
+    .bingo-board-root.hide-colors .bingo-cell--team-rest::before {{
+        opacity: 0;
+    }}
+    """
+
+
 def _bingo_line_segments_by_cell(
     leaders_by_coord: dict[tuple[int, int], str | None],
     *,
@@ -1572,8 +1602,11 @@ def _render_cell_html(
             f'<div class="bingo-cell-mid">{_leader_block_html(standing)}</div>'
             f'<div class="bingo-cell-bot">{_trailers_block_html(standing)}</div>'
         )
+    cell_classes = "bingo-cell bingo-cell-link"
+    if standing.leader == "Rest":
+        cell_classes += " bingo-cell--team-rest"
     return (
-        f'<div class="bingo-cell bingo-cell-link" role="button" tabindex="0"'
+        f'<div class="{cell_classes}" role="button" tabindex="0"'
         f' data-row="{chart.row}" data-col="{chart.column}"'
         f' aria-label="{aria_label}"'
         f' style="--bingo-cell-bg:{cell_bg};{border_css}">'
@@ -5882,7 +5915,7 @@ def _bingo_board_component_css(*, cols: int, rows: int) -> str:
         font-size: 1rem;
         font-weight: 600;
     }}
-    """
+    """ + _bingo_rest_claimed_watermark_css()
 
 
 def _bingo_board_component_height(rows: int, cols: int) -> int:
