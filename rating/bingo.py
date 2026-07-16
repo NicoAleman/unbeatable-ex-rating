@@ -76,6 +76,7 @@ class BingoChartLeaderboardEntry:
     okay: int | None = None
     barely: int | None = None
     miss: int | None = None
+    created_at: datetime | None = None
 
 
 def _bingo_leaderboard_entry_from_row(row) -> BingoChartLeaderboardEntry:
@@ -90,6 +91,12 @@ def _bingo_leaderboard_entry_from_row(row) -> BingoChartLeaderboardEntry:
             return None
         value = row[key]
         return float(value) if value is not None else None
+
+    created_at = row.get("created_at") if hasattr(row, "get") else None
+    if created_at is not None and not isinstance(created_at, datetime):
+        created_at = None
+    if isinstance(created_at, datetime) and created_at.tzinfo is None:
+        created_at = created_at.replace(tzinfo=timezone.utc)
 
     return BingoChartLeaderboardEntry(
         player_id=str(row["player_id"]),
@@ -106,6 +113,7 @@ def _bingo_leaderboard_entry_from_row(row) -> BingoChartLeaderboardEntry:
         okay=optional_int("okay"),
         barely=optional_int("barely"),
         miss=optional_int("miss"),
+        created_at=created_at,
     )
 
 
@@ -389,7 +397,8 @@ def load_bingo_chart_player_leaderboard(
                             good,
                             okay,
                             barely,
-                            miss
+                            miss,
+                            created_at
                         FROM bingo_scores
                         WHERE song = %s
                           AND difficulty = %s
@@ -415,7 +424,8 @@ def load_bingo_chart_player_leaderboard(
                             good,
                             okay,
                             barely,
-                            miss
+                            miss,
+                            created_at
                         FROM bingo_scores
                         WHERE song = %s
                           AND difficulty = %s
@@ -466,7 +476,8 @@ def load_all_bingo_chart_player_leaderboards(
                             good,
                             okay,
                             barely,
-                            miss
+                            miss,
+                            created_at
                         FROM bingo_scores
                         WHERE created_at >= %s
                         ORDER BY song, difficulty, player_id, score DESC, created_at DESC
@@ -492,7 +503,8 @@ def load_all_bingo_chart_player_leaderboards(
                             good,
                             okay,
                             barely,
-                            miss
+                            miss,
+                            created_at
                         FROM bingo_scores
                         WHERE created_at >= %s
                           AND created_at < %s

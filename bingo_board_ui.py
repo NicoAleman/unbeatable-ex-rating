@@ -1860,7 +1860,7 @@ _BINGO_CHART_JUDGEMENT_EXPAND_CSS = """
         box-sizing: border-box;
     }
     .bingo-chart-modal-detail-row.is-open .bingo-chart-modal-detail-panel {
-        max-height: 4.5rem;
+        max-height: 5.5rem;
         opacity: 1;
         transform: translateY(0);
         padding: 0.4rem 0.65rem 0.55rem;
@@ -1898,6 +1898,14 @@ _BINGO_CHART_JUDGEMENT_EXPAND_CSS = """
         font-weight: 600;
         color: rgba(234, 234, 234, 0.58);
         padding: 0.15rem 0;
+    }
+    .bingo-judgement-submitted {
+        margin-top: 0.4rem;
+        text-align: center;
+        font-size: 0.72rem;
+        font-weight: 600;
+        color: rgba(255, 255, 255, 0.82);
+        line-height: 1.2;
     }
 """
 
@@ -8115,13 +8123,23 @@ def _render_bingo_judgement_stats_html(entry: BingoChartLeaderboardEntry) -> str
             f"{html.escape(f'{int(value):,}')}</div>"
             "</div>"
         )
-    if not stats:
-        return (
+    parts: list[str] = []
+    if stats:
+        parts.append(f'<div class="bingo-judgement-stats">{"".join(stats)}</div>')
+    else:
+        parts.append(
             '<div class="bingo-judgement-empty">'
             "No judgement data recorded for this score."
             "</div>"
         )
-    return f'<div class="bingo-judgement-stats">{"".join(stats)}</div>'
+    if entry.created_at is not None and int(entry.score) > 0:
+        submitted_ago = _format_bingo_time_ago(entry.created_at)
+        parts.append(
+            f'<div class="bingo-judgement-submitted">'
+            f"Submitted {html.escape(submitted_ago)}"
+            "</div>"
+        )
+    return "".join(parts)
 
 
 def _bingo_chart_modal_column_count(*, show_points: bool) -> int:
