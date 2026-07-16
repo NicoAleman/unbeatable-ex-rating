@@ -6462,6 +6462,32 @@ def _bingo_board_component_css(*, cols: int, rows: int) -> str:
         opacity: 0;
         pointer-events: none;
     }}
+    /* Detailed + selected player: hover reveals player-board view (inverse of player-board hover). */
+    .bingo-board-root.has-player-data.is-detailed .bingo-cell:hover:has(.bingo-cell-player-view:not(:empty)) {{
+        z-index: 6;
+    }}
+    .bingo-board-root.has-player-data.is-detailed .bingo-cell:hover:has(.bingo-cell-player-view:not(:empty)) .bingo-cell-team-view {{
+        opacity: 0;
+        pointer-events: none;
+    }}
+    .bingo-board-root.has-player-data.is-detailed .bingo-cell:hover:has(.bingo-cell-player-view:not(:empty)) .bingo-cell-player-view {{
+        opacity: 1;
+        pointer-events: auto;
+        z-index: 1;
+        display: grid;
+        grid-template-rows: minmax(4.25rem, 1fr) minmax(2.15rem, auto);
+    }}
+    .bingo-board-root.has-player-data.is-detailed .bingo-cell:hover:has(.bingo-cell-player-view:not(:empty)) .bingo-cell-player-view:has(.bingo-cell-crit-row) {{
+        grid-template-rows: minmax(3.25rem, 1fr) auto minmax(2.15rem, auto);
+    }}
+    .bingo-board-root.has-player-data.is-detailed .bingo-cell:hover:has(.bingo-cell-player-view--not-played) .bingo-cell-player-view {{
+        grid-template-rows: minmax(4.25rem, 1fr);
+    }}
+    .bingo-board-root.has-player-data.is-detailed .bingo-cell:hover:has(.bingo-cell-player-view:not(:empty)) .bingo-cell-player-view .bingo-cell-mid,
+    .bingo-board-root.has-player-data.is-detailed .bingo-cell:hover:has(.bingo-cell-player-view:not(:empty)) .bingo-cell-player-view .bingo-cell-bot {{
+        opacity: 1;
+        transform: none;
+    }}
     .bingo-board-root.has-player-data:not(.is-detailed):not(.is-player-board) .bingo-cell:hover .bingo-cell-body {{
         min-height: 0;
         height: 100%;
