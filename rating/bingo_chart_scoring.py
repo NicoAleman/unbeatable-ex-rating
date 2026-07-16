@@ -26,7 +26,9 @@ class ChartClaimScoring:
 
 
 def bingo_scoring_version() -> str:
-    version = str(BINGO_SCORING_VERSION).strip().lower()
+    from rating import bingo_config
+
+    version = str(bingo_config.BINGO_SCORING_VERSION).strip().lower()
     if version not in {"v1", "v2"}:
         return "v1"
     return version

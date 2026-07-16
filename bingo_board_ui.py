@@ -456,6 +456,47 @@ def _player_footer_html(label: str) -> str:
     )
 
 
+def _build_bingo_player_board_payload(
+    *,
+    charts: list[BingoChart],
+    teams: dict[str, list[BingoTeamPlayer]],
+    leaderboard_by_chart: dict[tuple[str, str], list[BingoChartLeaderboardEntry]],
+) -> dict[str, dict[str, dict[str, str | bool]]]:
+    """Per-player cell overlay data for client-side Player Board updates."""
+    payload: dict[str, dict[str, dict[str, str | bool]]] = {}
+    for player in _flatten_bingo_players(teams):
+        cells: dict[str, dict[str, str | bool]] = {}
+        for chart in charts:
+            entry = _player_chart_entry(
+                chart,
+                player_id=player.player_id,
+                leaderboard_by_chart=leaderboard_by_chart,
+            )
+            score = int(entry.score) if entry is not None else 0
+            not_played = score <= 0
+            rank = _player_chart_placement_rank(
+                chart,
+                player_id=player.player_id,
+                leaderboard_by_chart=leaderboard_by_chart,
+                roster=teams,
+            )
+            footer_label = _format_player_chart_footer_label(
+                chart,
+                score=score,
+                rank=rank,
+            )
+            cell: dict[str, str | bool] = {
+                "mid_html": _player_block_html(team=player.team, score=score),
+                "crit_html": _player_crit_disabled_row_html(entry),
+                "not_played": not_played,
+            }
+            if not not_played:
+                cell["footer_html"] = _player_footer_html(footer_label)
+            cells[f"{chart.row},{chart.column}"] = cell
+        payload[player.player_id] = cells
+    return payload
+
+
 def _render_bingo_player_view_controls(
     teams: dict[str, list[BingoTeamPlayer]],
     *,
@@ -503,16 +544,12 @@ def _render_bingo_player_view_controls(
             max-width: 100% !important;
             border: none !important;
         }
-        .bingo-player-view-marker { display: none; }
+        .bingo-view-player-id-marker { display: none; }
         </style>
         """,
         unsafe_allow_html=True,
     )
     with st.container(key="bingo_player_view_shell"):
-        st.markdown(
-            '<span class="bingo-player-view-marker"></span>',
-            unsafe_allow_html=True,
-        )
         search_col, select_col = st.columns([1, 1.15], gap="small")
         with search_col:
             player_search = st.text_input(
@@ -535,20 +572,32 @@ def _render_bingo_player_view_controls(
         )
         if player_needle:
             player_matches = player_matches[:BINGO_SEARCH_LIMIT]
-        player_matches = _ensure_view_player_in_select_matches(players, player_matches)
+        player_matches = _ensure_view_player_in_select_matches(
+            players,
+            player_matches,
+            search_needle=player_needle,
+        )
         player_options = [BINGO_PLAYER_SELECT_PLACEHOLDER] + [
             _bingo_player_option_label(player) for player in player_matches
         ]
         _presync_player_select_from_view_id(teams, player_options=player_options)
+        select_key = "bingo-board-player-select"
+        forced_search_placeholder = bool(
+            player_needle
+            and st.session_state.get(select_key) not in (None, BINGO_PLAYER_SELECT_PLACEHOLDER)
+            and st.session_state.get(select_key) not in player_options
+        )
+        if forced_search_placeholder:
+            st.session_state[select_key] = BINGO_PLAYER_SELECT_PLACEHOLDER
         with select_col:
-            if player_needle:
-                _auto_select_if_single_match(
-                    select_key="bingo-board-player-select",
-                    placeholder=BINGO_PLAYER_SELECT_PLACEHOLDER,
-                    matches=[
-                        _bingo_player_option_label(player) for player in player_matches
-                    ],
-                )
+            _auto_select_if_single_match(
+                select_key="bingo-board-player-select",
+                placeholder=BINGO_PLAYER_SELECT_PLACEHOLDER,
+                matches=[
+                    _bingo_player_option_label(player) for player in player_matches
+                ],
+                search_needle=player_search,
+            )
             selected_option = st.selectbox(
                 "Player",
                 options=player_options,
@@ -561,20 +610,19 @@ def _render_bingo_player_view_controls(
         )
         saved_player_id = st.session_state.get("bingo_view_player_id")
         if selected_option == BINGO_PLAYER_SELECT_PLACEHOLDER:
-            st.session_state.pop("bingo_view_player_id", None)
-            st.session_state.pop("bingo_auto_enable_player_board", None)
-            selected_player = None
+            if forced_search_placeholder:
+                selected_player = _resolve_bingo_view_player(teams)
+            else:
+                st.session_state.pop("bingo_view_player_id", None)
+                st.session_state.pop("bingo_auto_enable_player_board", None)
+                selected_player = None
         elif selected_player is not None:
             if saved_player_id != selected_player.player_id:
                 st.session_state["bingo_auto_enable_player_board"] = True
             st.session_state["bingo_view_player_id"] = selected_player.player_id
         elif saved_player_id:
             selected_player = _resolve_bingo_view_player(teams)
-            if selected_player is not None:
-                label = _bingo_player_option_label(selected_player)
-                if label in player_options:
-                    st.session_state["bingo-board-player-select"] = label
-            else:
+            if selected_player is None:
                 st.session_state.pop("bingo_view_player_id", None)
                 st.session_state.pop("bingo_auto_enable_player_board", None)
         if (
@@ -590,6 +638,22 @@ def _render_bingo_player_view_controls(
                 leaderboard_by_chart=leaderboard_by_chart,
                 leaders_by_chart=leaders_by_chart,
             )
+        auto_enable_player_board = bool(
+            st.session_state.pop("bingo_auto_enable_player_board", False)
+        )
+        marker_player_id = ""
+        marker_player_team = ""
+        if selected_player is not None:
+            marker_player_id = html.escape(selected_player.player_id, quote=True)
+            marker_player_team = html.escape(selected_player.team, quote=True)
+        auto_attr = "1" if auto_enable_player_board else "0"
+        st.markdown(
+            f'<span class="bingo-view-player-id-marker" '
+            f'data-player-id="{marker_player_id}" '
+            f'data-player-team="{marker_player_team}" '
+            f'data-auto-player-board="{auto_attr}" hidden></span>',
+            unsafe_allow_html=True,
+        )
         return selected_player
 
 
@@ -611,7 +675,35 @@ _BINGO_BOARD_TOGGLE_JS = """
       detailed: doc.querySelector(".bingo-detailed-toggle"),
       playerBoard: doc.querySelector(".bingo-player-board-toggle"),
       container: doc.querySelector(".bingo-board-controls-toolbar"),
+      viewPlayerMarker: doc.querySelector(".bingo-view-player-id-marker"),
     };
+  }
+
+  function syncViewPlayer() {
+    const { playerBoard, detailed, viewPlayerMarker } = toggles();
+    if (!playerBoard) {
+      return;
+    }
+    const playerId = viewPlayerMarker?.dataset.playerId || "";
+    const hasPlayer = !!playerId;
+    const label = playerBoard.closest(".bingo-board-toggle-label");
+    playerBoard.disabled = !hasPlayer;
+    if (label) {
+      label.classList.toggle("is-disabled", !hasPlayer);
+    }
+    if (!hasPlayer) {
+      playerBoard.checked = false;
+      sessionStorage.setItem(KEYS.playerBoard, "0");
+      return;
+    }
+    if (viewPlayerMarker?.dataset.autoPlayerBoard === "1") {
+      viewPlayerMarker.dataset.autoPlayerBoard = "0";
+      playerBoard.checked = true;
+      if (detailed) {
+        detailed.checked = false;
+      }
+      sessionStorage.setItem(KEYS.playerBoard, "1");
+    }
   }
 
   function saveState() {
@@ -645,6 +737,7 @@ _BINGO_BOARD_TOGGLE_JS = """
     if (!hideColors || !hideLines || !detailed || !playerBoard) {
       return;
     }
+    syncViewPlayer();
     if (sessionStorage.getItem(KEYS.hideColors) !== null) {
       hideColors.checked = sessionStorage.getItem(KEYS.hideColors) === "1";
     }
@@ -656,10 +749,6 @@ _BINGO_BOARD_TOGGLE_JS = """
     }
     if (!playerBoard.disabled && sessionStorage.getItem(KEYS.playerBoard) !== null) {
       playerBoard.checked = sessionStorage.getItem(KEYS.playerBoard) === "1";
-    }
-    if (playerBoard.disabled) {
-      playerBoard.checked = false;
-      sessionStorage.setItem(KEYS.playerBoard, "0");
     }
     if (container && container.dataset.autoPlayerBoard === "1") {
       if (!playerBoard.disabled) {
@@ -706,6 +795,7 @@ _BINGO_BOARD_TOGGLE_JS = """
     boot();
     setInterval(boot, 400);
     setInterval(() => {
+      syncViewPlayer();
       enforceExclusive();
       saveState();
     }, 250);
@@ -735,8 +825,6 @@ def _mount_bingo_board_toggle_script() -> None:
 def _render_bingo_board_toolbar(
     *,
     show_refresh: bool = True,
-    player_board_enabled: bool = False,
-    auto_enable_player_board: bool = False,
 ) -> None:
     if show_refresh:
         if "bingo_last_updated" not in st.session_state:
@@ -974,18 +1062,10 @@ def _render_bingo_board_toolbar(
             else:
                 with st.container(key="bingo_toggle_boot"):
                     _mount_bingo_board_toggle_script()
-    player_board_disabled = "" if player_board_enabled else " disabled"
-    player_board_label_class = (
-        "bingo-board-toggle-label"
-        if player_board_enabled
-        else "bingo-board-toggle-label is-disabled"
-    )
-    auto_player_board_attr = "1" if auto_enable_player_board else "0"
     with right:
         st.markdown(
-            f"""
-            <div class="bingo-board-controls bingo-board-controls-toolbar"
-              data-auto-player-board="{auto_player_board_attr}">
+            """
+            <div class="bingo-board-controls bingo-board-controls-toolbar">
               <label class="bingo-board-toggle-label">
                 <input type="checkbox" class="bingo-board-toggle bingo-colors-toggle" />
                 <span>Hide Colors</span>
@@ -998,10 +1078,10 @@ def _render_bingo_board_toolbar(
                 <input type="checkbox" class="bingo-board-toggle bingo-detailed-toggle" />
                 <span>Detailed Board</span>
               </label>
-              <label class="{player_board_label_class}">
+              <label class="bingo-board-toggle-label is-disabled">
                 <input type="checkbox"
                   class="bingo-board-toggle bingo-player-board-toggle"
-                  {player_board_disabled} />
+                  disabled />
                 <span>Player Board</span>
               </label>
             </div>
@@ -1594,6 +1674,7 @@ def _render_cell_html(
     player_score: int | None = None,
     player_max_score_label: str | None = None,
     player_crit_row_html: str = "",
+    player_board_ready: bool = False,
 ) -> str:
     chart = standing.chart
     song = html.escape(chart.display_name)
@@ -1616,33 +1697,39 @@ def _render_cell_html(
     )
     line_html = _bingo_line_svg_html(bingo_segments or [])
     aria_label = html.escape(f"View leaderboard for {chart.display_name}")
-    if view_player is not None:
-        player_score_val = int(player_score or 0)
-        not_played = player_score_val <= 0
-        player_view_class = "bingo-cell-view bingo-cell-player-view"
-        if not_played:
-            player_view_class += " bingo-cell-player-view--not-played"
-        player_bot_html = ""
-        if not not_played:
-            player_bot_html = (
-                f'<div class="bingo-cell-bot">'
-                f"{_player_footer_html(player_max_score_label or '— - — Place')}"
-                "</div>"
+    if player_board_ready or view_player is not None:
+        if view_player is not None:
+            player_score_val = int(player_score or 0)
+            not_played = player_score_val <= 0
+            player_view_class = "bingo-cell-view bingo-cell-player-view"
+            if not_played:
+                player_view_class += " bingo-cell-player-view--not-played"
+            player_bot_html = ""
+            if not not_played:
+                player_bot_html = (
+                    f'<div class="bingo-cell-bot">'
+                    f"{_player_footer_html(player_max_score_label or '— - — Place')}"
+                    "</div>"
+                )
+            body_class = "bingo-cell-body"
+            if not_played:
+                body_class += " bingo-cell-body--player-not-played"
+            player_inner = (
+                f'<div class="bingo-cell-mid">{_player_block_html(team=view_player.team, score=player_score_val)}</div>'
+                f"{player_crit_row_html}"
+                f"{player_bot_html}"
             )
-        body_class = "bingo-cell-body"
-        if not_played:
-            body_class += " bingo-cell-body--player-not-played"
+        else:
+            body_class = "bingo-cell-body"
+            player_view_class = "bingo-cell-view bingo-cell-player-view"
+            player_inner = ""
         body_html = (
             f'<div class="{body_class}">'
             '<div class="bingo-cell-view bingo-cell-team-view">'
             f'<div class="bingo-cell-mid">{_leader_block_html(standing)}</div>'
             f'<div class="bingo-cell-bot">{_trailers_block_html(standing)}</div>'
             "</div>"
-            f'<div class="{player_view_class}">'
-            f'<div class="bingo-cell-mid">{_player_block_html(team=view_player.team, score=player_score_val)}</div>'
-            f"{player_crit_row_html}"
-            f"{player_bot_html}"
-            "</div>"
+            f'<div class="{player_view_class}">{player_inner}</div>'
             "</div>"
         )
     else:
@@ -3819,7 +3906,15 @@ def _auto_select_if_single_match(
     select_key: str,
     placeholder: str,
     matches: list[str],
+    search_needle: str,
 ) -> None:
+    """Auto-pick only when the search filter changes, not on every rerun."""
+    cache_key = f"{select_key}_last_search_needle"
+    normalized = search_needle.strip().casefold()
+    if st.session_state.get(cache_key) == normalized:
+        return
+    st.session_state[cache_key] = normalized
+
     if len(matches) == 1:
         st.session_state[select_key] = matches[0]
     elif len(matches) == 0:
@@ -3849,8 +3944,12 @@ def _find_bingo_player(
 def _ensure_view_player_in_select_matches(
     players: list[BingoTeamPlayer],
     player_matches: list[BingoTeamPlayer],
+    *,
+    search_needle: str = "",
 ) -> list[BingoTeamPlayer]:
-    """Keep the active view player in the select options after refresh/filtering."""
+    """Keep the active view player in options when not filtering (e.g. after refresh)."""
+    if search_needle.strip():
+        return player_matches
     player_id = st.session_state.get("bingo_view_player_id")
     if not player_id:
         return player_matches
@@ -3870,13 +3969,17 @@ def _presync_player_select_from_view_id(
     *,
     player_options: list[str],
 ) -> None:
-    """Restore selectbox state from bingo_view_player_id before the widget renders."""
+    """Restore selectbox only when widget state is missing or stale (not user changes)."""
     saved_player = _resolve_bingo_view_player(teams)
     if saved_player is None:
         return
     label = _bingo_player_option_label(saved_player)
-    if label in player_options:
-        st.session_state["bingo-board-player-select"] = label
+    if label not in player_options:
+        return
+    select_key = "bingo-board-player-select"
+    current = st.session_state.get(select_key)
+    if current is None or current not in player_options:
+        st.session_state[select_key] = label
 
 
 def _resolve_bingo_view_player(
@@ -4028,14 +4131,14 @@ def _render_bingo_manual_submission(
                 _bingo_player_option_label(player) for player in player_matches
             ]
 
-            if player_needle:
-                _auto_select_if_single_match(
-                    select_key="bingo-submit-player-select",
-                    placeholder=BINGO_PLAYER_SELECT_PLACEHOLDER,
-                    matches=[
-                        _bingo_player_option_label(player) for player in player_matches
-                    ],
-                )
+            _auto_select_if_single_match(
+                select_key="bingo-submit-player-select",
+                placeholder=BINGO_PLAYER_SELECT_PLACEHOLDER,
+                matches=[
+                    _bingo_player_option_label(player) for player in player_matches
+                ],
+                search_needle=player_search,
+            )
             selected_player_option = st.selectbox(
                 "Player",
                 options=player_options,
@@ -4081,14 +4184,14 @@ def _render_bingo_manual_submission(
                 _bingo_chart_option_label(chart) for chart in chart_matches
             ]
 
-            if chart_needle:
-                _auto_select_if_single_match(
-                    select_key="bingo-submit-chart-select",
-                    placeholder=BINGO_CHART_SELECT_PLACEHOLDER,
-                    matches=[
-                        _bingo_chart_option_label(chart) for chart in chart_matches
-                    ],
-                )
+            _auto_select_if_single_match(
+                select_key="bingo-submit-chart-select",
+                placeholder=BINGO_CHART_SELECT_PLACEHOLDER,
+                matches=[
+                    _bingo_chart_option_label(chart) for chart in chart_matches
+                ],
+                search_needle=chart_search,
+            )
             selected_chart_option = st.selectbox(
                 "Chart",
                 options=chart_options,
@@ -7040,10 +7143,12 @@ def _build_bingo_board_interactive_html(
     cells_html: list[str],
     cols: int,
     modal_payload: dict[str, dict[str, str]],
+    player_board_payload: dict[str, dict[str, dict[str, str | bool]]],
     snapshot_label: str,
     updated_ms: int | None,
 ) -> str:
     payload_json = json.dumps(modal_payload).replace("</", "<\\/")
+    player_board_json = json.dumps(player_board_payload).replace("</", "<\\/")
     snapshot_json = json.dumps(snapshot_label)
     updated_ms_json = "null" if updated_ms is None else str(int(updated_ms))
     return f"""
@@ -7120,6 +7225,8 @@ def _build_bingo_board_interactive_html(
         (function () {{
           const root = document.getElementById("bingo-board-root");
           const modalData = {payload_json};
+          const playerBoardData = {player_board_json};
+          let selectedPlayerId = null;
           const snapshotLabel = {snapshot_json};
           const updatedMs = {updated_ms_json};
           const modal = document.getElementById("bingo-chart-modal");
@@ -7194,11 +7301,75 @@ def _build_bingo_board_interactive_html(
               if (detailed && playerBoard) {{
                 playerBoard = false;
               }}
+              syncSelectedPlayerFromParent(parentDoc);
             }} catch (error) {{}}
             root.classList.toggle("is-detailed", detailed);
             root.classList.toggle("is-player-board", playerBoard);
             root.classList.toggle("hide-colors", hideColors);
             root.classList.toggle("hide-lines", hideLines || hideColors);
+          }}
+
+          function applySelectedPlayer(playerId) {{
+            selectedPlayerId = playerId || null;
+            root.querySelectorAll(".bingo-cell-link").forEach((cell) => {{
+              const playerView = cell.querySelector(".bingo-cell-player-view");
+              const body = cell.querySelector(".bingo-cell-body");
+              if (!playerView || !body) {{
+                return;
+              }}
+              const key = cell.dataset.row + "," + cell.dataset.col;
+              const data =
+                playerId && playerBoardData[playerId]
+                  ? playerBoardData[playerId][key]
+                  : null;
+              if (!data) {{
+                playerView.className = "bingo-cell-view bingo-cell-player-view";
+                playerView.innerHTML = "";
+                body.classList.remove("bingo-cell-body--player-not-played");
+                return;
+              }}
+              const notPlayed = !!data.not_played;
+              playerView.className =
+                "bingo-cell-view bingo-cell-player-view" +
+                (notPlayed ? " bingo-cell-player-view--not-played" : "");
+              let inner = data.mid_html || "";
+              if (data.crit_html) {{
+                inner += data.crit_html;
+              }}
+              if (data.footer_html) {{
+                inner += '<div class="bingo-cell-bot">' + data.footer_html + "</div>";
+              }}
+              playerView.innerHTML = inner;
+              body.classList.toggle("bingo-cell-body--player-not-played", notPlayed);
+            }});
+          }}
+
+          function syncSelectedPlayerFromParent(parentDoc) {{
+            let playerId = "";
+            try {{
+              const marker = parentDoc.querySelector(".bingo-view-player-id-marker");
+              playerId = marker?.dataset.playerId || "";
+            }} catch (error) {{
+              playerId = "";
+            }}
+            if (playerId !== selectedPlayerId) {{
+              applySelectedPlayer(playerId);
+            }}
+          }}
+
+          function applyModalPlayerHighlight() {{
+            bodyEl
+              .querySelectorAll("tr.bingo-chart-modal-row--highlighted")
+              .forEach((row) => row.classList.remove("bingo-chart-modal-row--highlighted"));
+            if (!selectedPlayerId) {{
+              return;
+            }}
+            const row = bodyEl.querySelector(
+              'tr[data-player-id="' + selectedPlayerId + '"]'
+            );
+            if (row) {{
+              row.classList.add("bingo-chart-modal-row--highlighted");
+            }}
           }}
 
           function closeHelpTips() {{
@@ -7253,7 +7424,16 @@ def _build_bingo_board_interactive_html(
               subtitleTimer = setInterval(updateSubtitle, 1000);
             }}
             bodyEl.innerHTML = data.table_html;
+            applyModalPlayerHighlight();
             initUpscore(data);
+            if (
+              selectedPlayerId &&
+              currentUpscore &&
+              currentUpscore.players.some((p) => p.player_id === selectedPlayerId)
+            ) {{
+              selectedUpscorePlayerId = selectedPlayerId;
+              syncUpscorePlayerUi();
+            }}
             modal.classList.add("is-open");
             modal.setAttribute("aria-hidden", "false");
             closeEl.focus();
@@ -7338,14 +7518,16 @@ def _render_bingo_board_component(
     cols: int,
     rows: int,
     modal_payload: dict[str, dict[str, str]],
+    player_board_payload: dict[str, dict[str, dict[str, str | bool]]],
     snapshot_label: str,
     updated_ms: int | None,
-    has_player_data: bool = False,
+    has_player_data: bool = True,
 ) -> None:
     inner_html = _build_bingo_board_interactive_html(
         cells_html=cells_html,
         cols=cols,
         modal_payload=modal_payload,
+        player_board_payload=player_board_payload,
         snapshot_label=snapshot_label,
         updated_ms=updated_ms,
     )
@@ -7547,6 +7729,56 @@ def _render_bingo_chart_leaderboard_table_html(
 
 
 @st.fragment
+def _render_bingo_player_controls_fragment(
+    *,
+    settings: BingoSettings,
+    charts: list,
+    completed_days: int,
+) -> None:
+    """Player search/select — reruns alone without remounting the board iframe."""
+    day_count = max(1, int(settings.day_count or 1))
+    view_day = _resolve_bingo_view_day(completed_days, day_count=day_count)
+    end_time = (
+        bingo_day_end(settings.start_time, view_day)
+        if view_day is not None and settings.start_time is not None
+        else None
+    )
+    try:
+        leaderboard_by_chart = load_all_bingo_chart_player_leaderboards(
+            start_time=settings.start_time,
+            end_time=end_time,
+        )
+    except Exception:
+        leaderboard_by_chart = {}
+
+    standings_data = load_bingo_chart_standings_data(
+        start_time=settings.start_time,
+        end_time=end_time,
+    )
+    totals = {key: values[0] for key, values in standings_data.items()}
+    player_bests = {key: values[1] for key, values in standings_data.items()}
+    leaders_by_chart: dict[tuple[str, str], str | None] = {}
+    for chart in charts:
+        standing = build_cell_standing(chart, totals, player_bests)
+        leaders_by_chart[(chart.song, chart.difficulty)] = standing.leader
+
+    teams = _cached_bingo_teams()
+    width = max(1, int(settings.board_width))
+    board_charts = bingo_charts_on_board(charts, width)
+    view_player = _render_bingo_player_view_controls(
+        teams,
+        board_charts=board_charts,
+        leaderboard_by_chart=leaderboard_by_chart,
+        leaders_by_chart=leaders_by_chart,
+    )
+    if view_player is None:
+        view_player = _resolve_bingo_view_player(teams)
+    _inject_scoreboard_player_row_highlight(
+        view_player.team if view_player is not None else None
+    )
+
+
+@st.fragment
 def _render_bingo_board_fragment(
     *,
     settings: BingoSettings,
@@ -7628,14 +7860,6 @@ def _render_bingo_board_fragment(
 
     teams = _cached_bingo_teams()
     board_charts = bingo_charts_on_board(charts, width)
-    view_player = _render_bingo_player_view_controls(
-        teams,
-        board_charts=board_charts,
-        leaderboard_by_chart=leaderboard_by_chart,
-        leaders_by_chart=leaders_by_chart,
-    )
-    if view_player is None:
-        view_player = _resolve_bingo_view_player(teams)
 
     for row in range(rows):
         for col in range(cols):
@@ -7649,28 +7873,6 @@ def _render_bingo_board_fragment(
                 if chart.group is not None
                 else None
             )
-            player_score: int | None = None
-            player_max_score_label: str | None = None
-            player_crit_row_html = ""
-            if view_player is not None:
-                player_entry = _player_chart_entry(
-                    chart,
-                    player_id=view_player.player_id,
-                    leaderboard_by_chart=leaderboard_by_chart,
-                )
-                player_score = int(player_entry.score) if player_entry is not None else 0
-                player_rank = _player_chart_placement_rank(
-                    chart,
-                    player_id=view_player.player_id,
-                    leaderboard_by_chart=leaderboard_by_chart,
-                    roster=teams,
-                )
-                player_max_score_label = _format_player_chart_footer_label(
-                    chart,
-                    score=int(player_score),
-                    rank=player_rank,
-                )
-                player_crit_row_html = _player_crit_disabled_row_html(player_entry)
             cells_html.append(
                 _render_cell_html(
                     standing,
@@ -7679,22 +7881,22 @@ def _render_bingo_board_fragment(
                     bingo_segments=line_segments.get((row, col), []),
                     rows=rows,
                     cols=cols,
-                    view_player=view_player,
-                    player_score=player_score,
-                    player_max_score_label=player_max_score_label,
-                    player_crit_row_html=player_crit_row_html,
+                    player_board_ready=True,
                 )
             )
 
+    player_board_payload = _build_bingo_player_board_payload(
+        charts=board_charts,
+        teams=teams,
+        leaderboard_by_chart=leaderboard_by_chart,
+    )
     board_width = _bingo_board_width_expr(rows=rows)
     _inject_bingo_board_layout_css(board_width)
     modal_payload = _build_bingo_chart_modal_payload(
         charts,
         leaderboard_by_chart,
-        roster=_cached_bingo_teams(),
-        highlight_player_id=(
-            view_player.player_id if view_player is not None else None
-        ),
+        roster=teams,
+        highlight_player_id=None,
     )
     updated_ms = (
         int(float(st.session_state.bingo_last_updated) * 1000)
@@ -7704,22 +7906,18 @@ def _render_bingo_board_fragment(
     with st.container(key="bingo_board_viewport"):
         _render_bingo_board_toolbar(
             show_refresh=view_day is None and _bingo_game_is_active(settings=settings),
-            player_board_enabled=view_player is not None,
-            auto_enable_player_board=bool(
-                st.session_state.pop("bingo_auto_enable_player_board", False)
-            ),
         )
         _render_bingo_board_component(
             cells_html=cells_html,
             cols=cols,
             rows=rows,
             modal_payload=modal_payload,
+            player_board_payload=player_board_payload,
             snapshot_label=_bingo_board_snapshot_label(
                 view_day=view_day,
                 day_count=day_count,
             ),
             updated_ms=updated_ms,
-            has_player_data=view_player is not None,
         )
     _render_bingo_day_view_controls(completed_days, day_count=day_count)
     highlight_day = view_day
@@ -7729,9 +7927,6 @@ def _render_bingo_board_fragment(
             day_count=day_count,
         )
     _inject_scoreboard_day_highlight(highlight_day, day_count=day_count)
-    _inject_scoreboard_player_row_highlight(
-        view_player.team if view_player is not None else None
-    )
 
 
 def _commit_pending_bingo_submission() -> None:
@@ -7850,6 +8045,11 @@ def render_bingo_board() -> None:
                 st.error(f"Failed to load Bingo scoreboard: {exc}")
                 scoreboard = None
 
+        _render_bingo_player_controls_fragment(
+            settings=settings,
+            charts=charts,
+            completed_days=completed_days,
+        )
         _render_bingo_board_fragment(
             settings=settings,
             charts=charts,
