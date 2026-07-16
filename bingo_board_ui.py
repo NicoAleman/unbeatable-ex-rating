@@ -41,6 +41,7 @@ from rating.bingo import (
     group_claim_owners,
     bingo_chart_max_score,
     load_all_bingo_chart_player_leaderboards,
+    load_bingo_chart_player_leaderboard,
     merge_chart_leaderboard_with_roster,
     load_bingo_chart_standings_data,
     load_bingo_charts,
@@ -1805,6 +1806,151 @@ _BINGO_CHART_MODAL_TABLE_LAYOUT_CSS = """
     }
 """
 
+_BINGO_CHART_JUDGEMENT_EXPAND_CSS = """
+    .bingo-chart-modal-data-row.bingo-chart-modal-row--expandable {
+        cursor: pointer;
+        transition: background-color 0.14s ease;
+    }
+    .bingo-chart-modal-data-row.bingo-chart-modal-row--expandable:hover td {
+        background: rgba(255, 255, 255, 0.045);
+    }
+    .bingo-chart-modal-data-row.bingo-chart-modal-row--expandable.is-expanded td {
+        background: rgba(255, 255, 255, 0.06);
+        border-bottom-color: transparent;
+    }
+    .bingo-chart-modal-data-row.bingo-chart-modal-row--expandable .bingo-chart-modal-player {
+        position: relative;
+        padding-right: 1.15rem;
+    }
+    .bingo-chart-modal-data-row.bingo-chart-modal-row--expandable .bingo-chart-modal-player::after {
+        content: "";
+        position: absolute;
+        right: 0.15rem;
+        top: 50%;
+        width: 0.42rem;
+        height: 0.42rem;
+        border-right: 2px solid rgba(234, 234, 234, 0.45);
+        border-bottom: 2px solid rgba(234, 234, 234, 0.45);
+        transform: translateY(-65%) rotate(45deg);
+        transition: transform 0.22s ease, border-color 0.14s ease;
+    }
+    .bingo-chart-modal-data-row.bingo-chart-modal-row--expandable.is-expanded .bingo-chart-modal-player::after {
+        transform: translateY(-35%) rotate(225deg);
+        border-color: rgba(110, 176, 255, 0.85);
+    }
+    .bingo-chart-modal-detail-row td {
+        padding: 0 !important;
+        border-bottom: 1px solid rgba(234, 234, 234, 0.14);
+        background: rgba(8, 12, 28, 0.55);
+    }
+    .bingo-chart-modal-detail-row.is-open td {
+        border-bottom-color: rgba(234, 234, 234, 0.14);
+    }
+    .bingo-chart-modal-detail-panel {
+        overflow: hidden;
+        max-height: 0;
+        opacity: 0;
+        transform: translateY(-0.35rem);
+        transition:
+            max-height 0.28s ease,
+            opacity 0.22s ease,
+            transform 0.28s ease,
+            padding 0.28s ease;
+        padding: 0 0.85rem;
+        box-sizing: border-box;
+    }
+    .bingo-chart-modal-detail-row.is-open .bingo-chart-modal-detail-panel {
+        max-height: 4.5rem;
+        opacity: 1;
+        transform: translateY(0);
+        padding: 0.4rem 0.65rem 0.55rem;
+    }
+    .bingo-judgement-stats {
+        display: flex;
+        flex-wrap: nowrap;
+        justify-content: space-between;
+        align-items: stretch;
+        gap: 0.25rem;
+    }
+    .bingo-judgement-stat {
+        display: flex;
+        flex-direction: column;
+        gap: 0.05rem;
+        min-width: 0;
+        flex: 1 1 0;
+        text-align: center;
+    }
+    .bingo-judgement-stat-label {
+        font-size: 0.6rem;
+        font-weight: 800;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        line-height: 1.05;
+    }
+    .bingo-judgement-stat-value {
+        font-size: 0.9rem;
+        font-weight: 800;
+        font-variant-numeric: tabular-nums;
+        line-height: 1.1;
+    }
+    .bingo-judgement-empty {
+        font-size: 0.88rem;
+        font-weight: 600;
+        color: rgba(234, 234, 234, 0.58);
+        padding: 0.15rem 0;
+    }
+"""
+
+_BINGO_CHART_MODAL_SUBTITLE_CSS = """
+    .bingo-chart-modal-subtitle-row {
+        display: flex;
+        align-items: center;
+        gap: 0.45rem;
+        margin: 0 0 1rem 0;
+        min-height: 1.25rem;
+    }
+    .bingo-chart-modal-subtitle-row .bingo-chart-modal-subtitle {
+        margin: 0;
+        flex: 1 1 auto;
+        min-width: 0;
+    }
+    .bingo-chart-modal-refresh-btn {
+        flex: 0 0 auto;
+        width: 1.2rem;
+        height: 1.2rem;
+        padding: 0;
+        margin: 0;
+        border: none;
+        border-radius: 999px;
+        background: #008f68;
+        color: #ffffff;
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        transition: background-color 0.14s ease, opacity 0.14s ease;
+    }
+    .bingo-chart-modal-refresh-btn:hover:not(:disabled) {
+        background: #007a58;
+    }
+    .bingo-chart-modal-refresh-btn:disabled {
+        opacity: 0.55;
+        cursor: wait;
+    }
+    .bingo-chart-modal-refresh-btn svg {
+        width: 0.78rem;
+        height: 0.78rem;
+        display: block;
+    }
+    .bingo-chart-modal-refresh-btn.is-spinning svg {
+        animation: bingo-chart-modal-refresh-spin 0.75s linear infinite;
+    }
+    @keyframes bingo-chart-modal-refresh-spin {
+        from { transform: rotate(0deg); }
+        to { transform: rotate(360deg); }
+    }
+"""
+
 _BINGO_PLAYER_SCORES_TABLE_CSS = """
     .bingo-player-scores-modal .bingo-chart-modal-panel {
         width: min(100%, 40rem);
@@ -2544,14 +2690,15 @@ def build_bingo_board_css() -> str:
         font-weight: 400;
         color: rgba(234, 234, 234, 0.82);
     }}
+    {_BINGO_CHART_MODAL_SUBTITLE_CSS}
     .bingo-chart-modal-subtitle {{
         font-size: 0.95rem;
         font-weight: 600;
         color: rgba(234, 234, 234, 0.62);
-        margin: 0 0 1rem 0;
         font-family: "Source Sans Pro", "Segoe UI", sans-serif;
     }}
     {_BINGO_CHART_MODAL_TABLE_LAYOUT_CSS}
+    {_BINGO_CHART_JUDGEMENT_EXPAND_CSS}
     .bingo-chart-modal-table {{
         width: max-content;
         max-width: 100%;
@@ -5866,6 +6013,139 @@ def _build_bingo_chart_modal_payload(
     return payload
 
 
+def _emit_bingo_chart_refresh_payload(
+    *,
+    settings: BingoSettings,
+    charts: list[BingoChart],
+    completed_days: int,
+    row: int,
+    col: int,
+) -> None:
+    """Load one chart leaderboard from DB and queue a postMessage emit."""
+    by_coord = {(chart.row, chart.column): chart for chart in charts}
+    chart = by_coord.get((int(row), int(col)))
+    if chart is None:
+        return
+
+    day_count = max(1, int(settings.day_count or 1))
+    view_day = _resolve_bingo_view_day(completed_days, day_count=day_count)
+    end_time = (
+        bingo_day_end(settings.start_time, view_day)
+        if view_day is not None and settings.start_time is not None
+        else None
+    )
+    entries = load_bingo_chart_player_leaderboard(
+        song=chart.song,
+        difficulty=chart.difficulty,
+        start_time=settings.start_time,
+        end_time=end_time,
+    )
+    teams = load_bingo_teams_by_ex_rating()
+    merged = merge_chart_leaderboard_with_roster(teams, entries)
+    highlight_id = st.session_state.get("bingo_view_player_id")
+    table_html = _render_bingo_chart_leaderboard_table_html(
+        merged,
+        song=chart.song,
+        difficulty=chart.difficulty,
+        highlight_player_id=highlight_id,
+    )
+    entries_by_id = {entry.player_id: entry for entry in merged}
+    upscore_entries = {
+        player_id: (entry.team, entry.display_name, int(entry.score))
+        for player_id, entry in entries_by_id.items()
+    }
+    upscore = build_chart_upscore_payload(
+        song=chart.song,
+        difficulty=chart.difficulty,
+        roster=teams,
+        entries_by_id=upscore_entries,
+        default_player_id=highlight_id,
+        max_score=bingo_chart_max_score(chart.song, chart.difficulty),
+    )
+    payload: dict[str, str | int] = {
+        "row": int(row),
+        "col": int(col),
+        "table_html": table_html,
+        "updated_ms": int(time.time() * 1000),
+    }
+    if upscore is not None:
+        payload["upscore_json"] = json.dumps(upscore)
+    st.session_state["bingo_chart_refresh_emit"] = payload
+
+
+@st.fragment
+def _render_bingo_chart_refresh_bridge(
+    *,
+    settings: BingoSettings,
+    charts: list[BingoChart],
+    completed_days: int,
+) -> None:
+    """Hidden per-chart refresh buttons; reruns alone to reload one scoreboard."""
+    board_charts = bingo_charts_on_board(charts, max(1, int(settings.board_width)))
+    st.markdown(
+        """
+        <style>
+        .st-key-bingo_chart_refresh_shell,
+        .st-key-bingo-chart-refresh-shell {
+            display: none !important;
+            visibility: hidden !important;
+            height: 0 !important;
+            overflow: hidden !important;
+            margin: 0 !important;
+            padding: 0 !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    def make_handler(chart_row: int, chart_col: int):
+        def handler() -> None:
+            _emit_bingo_chart_refresh_payload(
+                settings=settings,
+                charts=charts,
+                completed_days=completed_days,
+                row=chart_row,
+                col=chart_col,
+            )
+
+        return handler
+
+    with st.container(key="bingo_chart_refresh_shell"):
+        for chart in board_charts:
+            st.button(
+                f"Refresh chart {chart.row},{chart.column}",
+                key=f"bingo_chart_refresh_{chart.row}_{chart.column}",
+                on_click=make_handler(chart.row, chart.column),
+            )
+
+    emit_payload = st.session_state.pop("bingo_chart_refresh_emit", None)
+    if emit_payload is not None:
+        payload_json = json.dumps(emit_payload).replace("</", "<\\/")
+        components.html(
+            f"""
+            <script>
+            (function () {{
+              const payload = {payload_json};
+              try {{
+                const iframes = window.parent.document.querySelectorAll("iframe");
+                for (const iframe of iframes) {{
+                  try {{
+                    iframe.contentWindow.postMessage({{
+                      type: "bingo-chart-leaderboard-refresh",
+                      payload: payload,
+                    }}, "*");
+                  }} catch (error) {{}}
+                }}
+              }} catch (error) {{}}
+            }})();
+            </script>
+            """,
+            height=0,
+            scrolling=False,
+        )
+
+
 BINGO_CELL_SIZE = "12.75rem"
 
 
@@ -6460,13 +6740,14 @@ def _bingo_board_component_css(*, cols: int, rows: int) -> str:
         font-weight: 400;
         color: rgba(234, 234, 234, 0.82);
     }}
+    {_BINGO_CHART_MODAL_SUBTITLE_CSS}
     .bingo-chart-modal-subtitle {{
         font-size: 0.95rem;
         font-weight: 600;
         color: rgba(234, 234, 234, 0.62);
-        margin: 0 0 1rem 0;
     }}
     {_BINGO_CHART_MODAL_TABLE_LAYOUT_CSS}
+    {_BINGO_CHART_JUDGEMENT_EXPAND_CSS}
     .bingo-chart-modal-table {{
         width: max-content;
         max-width: 100%;
@@ -6864,7 +7145,7 @@ _BINGO_UPSCORE_CALCULATOR_JS = r"""
 
           function syncUpscoreScoreboardHighlight() {
             const playerId = activeUpscoreHighlightPlayerId();
-            bodyEl.querySelectorAll(".bingo-chart-modal-table tbody tr").forEach((row) => {
+            bodyEl.querySelectorAll(".bingo-chart-modal-data-row").forEach((row) => {
               const rowPlayerId = row.dataset.playerId || "";
               row.classList.toggle(
                 "bingo-chart-modal-row--highlighted",
@@ -7168,7 +7449,20 @@ def _build_bingo_board_interactive_html(
                 <div id="bingo-chart-modal-title" class="bingo-chart-modal-title"></div>
                 <button type="button" class="bingo-chart-modal-upscore-btn" id="bingo-chart-upscore-btn" hidden>Upscore Calculator</button>
               </div>
-              <div class="bingo-chart-modal-subtitle"></div>
+              <div class="bingo-chart-modal-subtitle-row">
+                <button type="button"
+                  class="bingo-chart-modal-refresh-btn"
+                  id="bingo-chart-modal-refresh-btn"
+                  aria-label="Refresh scoreboard">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                    stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"
+                    aria-hidden="true">
+                    <path d="M21 12a9 9 0 1 1-2.64-6.36"></path>
+                    <polyline points="21 3 21 9 15 9"></polyline>
+                  </svg>
+                </button>
+                <div class="bingo-chart-modal-subtitle"></div>
+              </div>
               <div class="bingo-chart-modal-upscore-panel" id="bingo-chart-upscore-panel" aria-hidden="true">
                 <div class="bingo-chart-modal-upscore-inner">
                   <div class="bingo-upscore-player-picker" id="bingo-upscore-player-picker">
@@ -7233,6 +7527,7 @@ def _build_bingo_board_interactive_html(
           const proofModal = document.getElementById("bingo-proof-modal");
           const titleEl = modal.querySelector(".bingo-chart-modal-title");
           const subtitleEl = modal.querySelector(".bingo-chart-modal-subtitle");
+          const refreshBtn = document.getElementById("bingo-chart-modal-refresh-btn");
           const bodyEl = modal.querySelector(".bingo-chart-modal-body");
           const backdropEl = modal.querySelector(".bingo-chart-modal-backdrop");
           const closeEl = modal.querySelector(".bingo-chart-modal-close");
@@ -7242,6 +7537,10 @@ def _build_bingo_board_interactive_html(
           let lastFocused = null;
           let subtitleTimer = null;
           let closeTimer = null;
+          let modalUpdatedMs = updatedMs;
+          let currentModalRow = null;
+          let currentModalCol = null;
+          let modalRefreshPending = false;
           const MODAL_ANIM_MS = 220;
           {_BINGO_UPSCORE_CALCULATOR_JS}
 
@@ -7275,11 +7574,109 @@ def _build_bingo_board_interactive_html(
           }}
 
           function updateSubtitle() {{
-            if (updatedMs !== null) {{
-              subtitleEl.textContent = "as of " + formatAgo(updatedMs);
+            if (modalUpdatedMs !== null) {{
+              subtitleEl.textContent = "as of " + formatAgo(modalUpdatedMs);
               return;
             }}
             subtitleEl.textContent = snapshotLabel;
+          }}
+
+          function findChartRefreshButton(row, col) {{
+            const selectors = [
+              ".st-key-bingo_chart_refresh_" + row + "_" + col + " button",
+              '[class*="st-key-bingo_chart_refresh_' + row + "_" + col + '"] button',
+            ];
+            try {{
+              const doc = window.parent.document;
+              for (const selector of selectors) {{
+                const button = doc.querySelector(selector);
+                if (button) {{
+                  return button;
+                }}
+              }}
+            }} catch (error) {{}}
+            return null;
+          }}
+
+          function setModalRefreshPending(isPending) {{
+            modalRefreshPending = isPending;
+            if (!refreshBtn) {{
+              return;
+            }}
+            refreshBtn.disabled = isPending;
+            refreshBtn.classList.toggle("is-spinning", isPending);
+          }}
+
+          function applyModalRefresh(payload) {{
+            if (!payload || payload.row !== currentModalRow || payload.col !== currentModalCol) {{
+              setModalRefreshPending(false);
+              return;
+            }}
+            const key = payload.row + "," + payload.col;
+            const openPlayerId = openJudgementPlayerId;
+            if (!modalData[key]) {{
+              modalData[key] = {{}};
+            }}
+            modalData[key].table_html = payload.table_html || "";
+            if (payload.upscore_json) {{
+              modalData[key].upscore_json = payload.upscore_json;
+            }}
+            bodyEl.innerHTML = modalData[key].table_html;
+            closeJudgementRows();
+            if (openPlayerId) {{
+              toggleJudgementRow(openPlayerId);
+            }}
+            applyModalPlayerHighlight();
+            initUpscore(modalData[key]);
+            if (
+              selectedPlayerId &&
+              currentUpscore &&
+              currentUpscore.players.some((p) => p.player_id === selectedPlayerId)
+            ) {{
+              selectedUpscorePlayerId = selectedPlayerId;
+              syncUpscorePlayerUi();
+            }}
+            if (payload.updated_ms !== undefined && payload.updated_ms !== null && updatedMs !== null) {{
+              modalUpdatedMs = Number(payload.updated_ms);
+            }}
+            updateSubtitle();
+            setModalRefreshPending(false);
+          }}
+
+          function requestModalRefresh() {{
+            if (
+              modalRefreshPending ||
+              currentModalRow === null ||
+              currentModalCol === null
+            ) {{
+              return;
+            }}
+            const button = findChartRefreshButton(currentModalRow, currentModalCol);
+            if (!button) {{
+              return;
+            }}
+            setModalRefreshPending(true);
+            button.click();
+            window.setTimeout(() => {{
+              if (modalRefreshPending) {{
+                setModalRefreshPending(false);
+              }}
+            }}, 10000);
+          }}
+
+          window.addEventListener("message", (event) => {{
+            if (!event.data || event.data.type !== "bingo-chart-leaderboard-refresh") {{
+              return;
+            }}
+            applyModalRefresh(event.data.payload);
+          }});
+
+          if (refreshBtn) {{
+            refreshBtn.addEventListener("click", (event) => {{
+              event.preventDefault();
+              event.stopPropagation();
+              requestModalRefresh();
+            }});
           }}
 
           function syncBoardModes() {{
@@ -7357,15 +7754,52 @@ def _build_bingo_board_interactive_html(
             }}
           }}
 
+          let openJudgementPlayerId = null;
+
+          function closeJudgementRows() {{
+            bodyEl.querySelectorAll(".bingo-chart-modal-detail-row.is-open").forEach((row) => {{
+              row.classList.remove("is-open");
+            }});
+            bodyEl.querySelectorAll(".bingo-chart-modal-data-row.is-expanded").forEach((row) => {{
+              row.classList.remove("is-expanded");
+              row.setAttribute("aria-expanded", "false");
+            }});
+            openJudgementPlayerId = null;
+          }}
+
+          function toggleJudgementRow(playerId) {{
+            if (!playerId) {{
+              return;
+            }}
+            if (openJudgementPlayerId === playerId) {{
+              closeJudgementRows();
+              return;
+            }}
+            closeJudgementRows();
+            const dataRow = bodyEl.querySelector(
+              '.bingo-chart-modal-data-row[data-player-id="' + playerId + '"]'
+            );
+            const detailRow = bodyEl.querySelector(
+              '.bingo-chart-modal-detail-row[data-player-id="' + playerId + '"]'
+            );
+            if (!dataRow || !detailRow) {{
+              return;
+            }}
+            dataRow.classList.add("is-expanded");
+            dataRow.setAttribute("aria-expanded", "true");
+            detailRow.classList.add("is-open");
+            openJudgementPlayerId = playerId;
+          }}
+
           function applyModalPlayerHighlight() {{
             bodyEl
-              .querySelectorAll("tr.bingo-chart-modal-row--highlighted")
+              .querySelectorAll("tr.bingo-chart-modal-data-row.bingo-chart-modal-row--highlighted")
               .forEach((row) => row.classList.remove("bingo-chart-modal-row--highlighted"));
             if (!selectedPlayerId) {{
               return;
             }}
             const row = bodyEl.querySelector(
-              'tr[data-player-id="' + selectedPlayerId + '"]'
+              '.bingo-chart-modal-data-row[data-player-id="' + selectedPlayerId + '"]'
             );
             if (row) {{
               row.classList.add("bingo-chart-modal-row--highlighted");
@@ -7388,6 +7822,10 @@ def _build_bingo_board_interactive_html(
             }}
             bodyEl.innerHTML = "";
             resetUpscorePanel();
+            closeJudgementRows();
+            currentModalRow = null;
+            currentModalCol = null;
+            setModalRefreshPending(false);
             if (lastFocused && typeof lastFocused.focus === "function") {{
               lastFocused.focus();
             }}
@@ -7418,12 +7856,17 @@ def _build_bingo_board_interactive_html(
             }}
             modal.classList.remove("is-closing");
             lastFocused = document.activeElement;
+            currentModalRow = Number(row);
+            currentModalCol = Number(col);
+            modalUpdatedMs = updatedMs;
+            setModalRefreshPending(false);
             titleEl.innerHTML = data.title_html || data.title || "";
             updateSubtitle();
-            if (updatedMs !== null && subtitleTimer === null) {{
+            if (modalUpdatedMs !== null && subtitleTimer === null) {{
               subtitleTimer = setInterval(updateSubtitle, 1000);
             }}
             bodyEl.innerHTML = data.table_html;
+            closeJudgementRows();
             applyModalPlayerHighlight();
             initUpscore(data);
             if (
@@ -7479,15 +7922,33 @@ def _build_bingo_board_interactive_html(
             }}
             closeHelpTips();
             const proofBtn = event.target.closest(".bingo-chart-modal-proof-btn");
-            if (!proofBtn) {{
+            if (proofBtn) {{
+              event.preventDefault();
+              event.stopPropagation();
+              const proofUrl = proofBtn.dataset.proofUrl;
+              if (proofUrl) {{
+                openProofModal(proofUrl);
+              }}
+              return;
+            }}
+            const dataRow = event.target.closest(".bingo-chart-modal-data-row.bingo-chart-modal-row--expandable");
+            if (dataRow) {{
+              event.preventDefault();
+              event.stopPropagation();
+              toggleJudgementRow(dataRow.dataset.playerId || "");
+              return;
+            }}
+          }});
+          bodyEl.addEventListener("keydown", (event) => {{
+            const dataRow = event.target.closest(".bingo-chart-modal-data-row.bingo-chart-modal-row--expandable");
+            if (!dataRow) {{
+              return;
+            }}
+            if (event.key !== "Enter" && event.key !== " ") {{
               return;
             }}
             event.preventDefault();
-            event.stopPropagation();
-            const proofUrl = proofBtn.dataset.proofUrl;
-            if (proofUrl) {{
-              openProofModal(proofUrl);
-            }}
+            toggleJudgementRow(dataRow.dataset.playerId || "");
           }});
           proofBackdropEl.addEventListener("click", closeProofModal);
           proofCloseEl.addEventListener("click", closeProofModal);
@@ -7630,6 +8091,43 @@ def _format_chart_points_cell(breakdown: ChartPlayerPointBreakdown) -> str:
     return accuracy
 
 
+_BINGO_JUDGEMENT_STAT_SPECS: tuple[tuple[str, str, str], ...] = (
+    ("critical", "Critical", "#ffffff"),
+    ("perfect", "Perfect", "#ff5c33"),
+    ("great", "Great", "#00cc44"),
+    ("good", "Good", "#3399ff"),
+    ("okay", "Okay", "#f5d547"),
+    ("barely", "Barely", "#ff4757"),
+    ("miss", "Miss", "#8b1a1a"),
+)
+
+
+def _render_bingo_judgement_stats_html(entry: BingoChartLeaderboardEntry) -> str:
+    stats: list[str] = []
+    for field, label, color in _BINGO_JUDGEMENT_STAT_SPECS:
+        value = getattr(entry, field, None)
+        if value is None:
+            continue
+        stats.append(
+            '<div class="bingo-judgement-stat">'
+            f'<div class="bingo-judgement-stat-label" style="color:{color};">{html.escape(label)}</div>'
+            f'<div class="bingo-judgement-stat-value" style="color:{color};">'
+            f"{html.escape(f'{int(value):,}')}</div>"
+            "</div>"
+        )
+    if not stats:
+        return (
+            '<div class="bingo-judgement-empty">'
+            "No judgement data recorded for this score."
+            "</div>"
+        )
+    return f'<div class="bingo-judgement-stats">{"".join(stats)}</div>'
+
+
+def _bingo_chart_modal_column_count(*, show_points: bool) -> int:
+    return 6 if show_points else 4
+
+
 def _render_bingo_chart_leaderboard_table_html(
     entries: list[BingoChartLeaderboardEntry],
     *,
@@ -7667,6 +8165,7 @@ def _render_bingo_chart_leaderboard_table_html(
             ),
         )
 
+    colspan = _bingo_chart_modal_column_count(show_points=show_points)
     rows: list[str] = []
     rank = 0
     for index, entry in enumerate(entries):
@@ -7678,11 +8177,14 @@ def _render_bingo_chart_leaderboard_table_html(
         player = html.escape(entry.display_name)
         score = html.escape(format_leader_score(entry.score))
         proof_icon = _bingo_chart_proof_icon_html(entry)
-        row_class = (
-            " bingo-chart-modal-row--highlighted"
-            if highlight_player_id is not None and entry.player_id == highlight_player_id
-            else ""
-        )
+        row_classes = ["bingo-chart-modal-data-row"]
+        if highlight_player_id is not None and entry.player_id == highlight_player_id:
+            row_classes.append("bingo-chart-modal-row--highlighted")
+        expandable = int(entry.score) > 0
+        if expandable:
+            row_classes.append("bingo-chart-modal-row--expandable")
+        row_class = html.escape(" ".join(row_classes))
+        player_id_attr = html.escape(entry.player_id, quote=True)
         points_cell = ""
         accuracy_cell = ""
         if show_points:
@@ -7696,8 +8198,13 @@ def _render_bingo_chart_leaderboard_table_html(
                 f"{_format_chart_points_cell(breakdowns[entry.player_id])}"
                 f"</td>"
             )
+        row_attrs = (
+            f' class="{row_class}" data-player-id="{player_id_attr}"'
+        )
+        if expandable:
+            row_attrs += ' role="button" tabindex="0" aria-expanded="false"'
         rows.append(
-            f'<tr class="{row_class.strip()}" data-player-id="{html.escape(entry.player_id)}">'
+            f"<tr{row_attrs}>"
             f'<td class="bingo-chart-modal-rank">{rank}</td>'
             f'<td class="bingo-chart-modal-player" style="color:{team_color};">'
             f"{player}</td>"
@@ -7707,6 +8214,15 @@ def _render_bingo_chart_leaderboard_table_html(
             f'<td class="bingo-chart-modal-proof-col">{proof_icon}</td>'
             "</tr>"
         )
+        if expandable:
+            detail_html = _render_bingo_judgement_stats_html(entry)
+            rows.append(
+                f'<tr class="bingo-chart-modal-detail-row" data-player-id="{player_id_attr}">'
+                f'<td colspan="{colspan}">'
+                f'<div class="bingo-chart-modal-detail-panel">{detail_html}</div>'
+                "</td>"
+                "</tr>"
+            )
     accuracy_header = (
         '<th class="bingo-chart-modal-accuracy">Max Score %</th>' if show_points else ""
     )
@@ -8046,6 +8562,11 @@ def render_bingo_board() -> None:
                 scoreboard = None
 
         _render_bingo_player_controls_fragment(
+            settings=settings,
+            charts=charts,
+            completed_days=completed_days,
+        )
+        _render_bingo_chart_refresh_bridge(
             settings=settings,
             charts=charts,
             completed_days=completed_days,

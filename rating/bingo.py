@@ -68,7 +68,45 @@ class BingoChartLeaderboardEntry:
     score: int
     source: str | None = None
     proof_path: str | None = None
+    accuracy: float | None = None
     critical: int | None = None
+    perfect: int | None = None
+    great: int | None = None
+    good: int | None = None
+    okay: int | None = None
+    barely: int | None = None
+    miss: int | None = None
+
+
+def _bingo_leaderboard_entry_from_row(row) -> BingoChartLeaderboardEntry:
+    def optional_int(key: str) -> int | None:
+        if key not in row:
+            return None
+        value = row[key]
+        return int(value) if value is not None else None
+
+    def optional_float(key: str) -> float | None:
+        if key not in row:
+            return None
+        value = row[key]
+        return float(value) if value is not None else None
+
+    return BingoChartLeaderboardEntry(
+        player_id=str(row["player_id"]),
+        display_name=str(row["display_name"]),
+        team=str(row["team"]),
+        score=int(row["score"]),
+        source=str(row["source"]) if row.get("source") is not None else None,
+        proof_path=str(row["proof_path"]) if row.get("proof_path") is not None else None,
+        accuracy=optional_float("accuracy"),
+        critical=optional_int("critical"),
+        perfect=optional_int("perfect"),
+        great=optional_int("great"),
+        good=optional_int("good"),
+        okay=optional_int("okay"),
+        barely=optional_int("barely"),
+        miss=optional_int("miss"),
+    )
 
 
 @dataclass(frozen=True)
@@ -344,7 +382,14 @@ def load_bingo_chart_player_leaderboard(
                             score,
                             source,
                             proof_path,
-                            critical
+                            accuracy,
+                            critical,
+                            perfect,
+                            great,
+                            good,
+                            okay,
+                            barely,
+                            miss
                         FROM bingo_scores
                         WHERE song = %s
                           AND difficulty = %s
@@ -363,7 +408,14 @@ def load_bingo_chart_player_leaderboard(
                             score,
                             source,
                             proof_path,
-                            critical
+                            accuracy,
+                            critical,
+                            perfect,
+                            great,
+                            good,
+                            okay,
+                            barely,
+                            miss
                         FROM bingo_scores
                         WHERE song = %s
                           AND difficulty = %s
@@ -377,18 +429,7 @@ def load_bingo_chart_player_leaderboard(
     except psycopg2.errors.UndefinedTable:
         return []
 
-    entries = [
-        BingoChartLeaderboardEntry(
-            player_id=str(row["player_id"]),
-            display_name=str(row["display_name"]),
-            team=str(row["team"]),
-            score=int(row["score"]),
-            source=str(row["source"]) if row["source"] is not None else None,
-            proof_path=str(row["proof_path"]) if row["proof_path"] is not None else None,
-            critical=int(row["critical"]) if row["critical"] is not None else None,
-        )
-        for row in rows
-    ]
+    entries = [_bingo_leaderboard_entry_from_row(row) for row in rows]
     entries.sort(key=lambda entry: (-entry.score, entry.display_name.casefold()))
     return entries
 
@@ -418,7 +459,14 @@ def load_all_bingo_chart_player_leaderboards(
                             score,
                             source,
                             proof_path,
-                            critical
+                            accuracy,
+                            critical,
+                            perfect,
+                            great,
+                            good,
+                            okay,
+                            barely,
+                            miss
                         FROM bingo_scores
                         WHERE created_at >= %s
                         ORDER BY song, difficulty, player_id, score DESC, created_at DESC
@@ -437,7 +485,14 @@ def load_all_bingo_chart_player_leaderboards(
                             score,
                             source,
                             proof_path,
-                            critical
+                            accuracy,
+                            critical,
+                            perfect,
+                            great,
+                            good,
+                            okay,
+                            barely,
+                            miss
                         FROM bingo_scores
                         WHERE created_at >= %s
                           AND created_at < %s
@@ -452,19 +507,7 @@ def load_all_bingo_chart_player_leaderboards(
     result: dict[tuple[str, str], list[BingoChartLeaderboardEntry]] = {}
     for row in rows:
         key = (str(row["song"]), str(row["difficulty"]))
-        result.setdefault(key, []).append(
-            BingoChartLeaderboardEntry(
-                player_id=str(row["player_id"]),
-                display_name=str(row["display_name"]),
-                team=str(row["team"]),
-                score=int(row["score"]),
-                source=str(row["source"]) if row["source"] is not None else None,
-                proof_path=(
-                    str(row["proof_path"]) if row["proof_path"] is not None else None
-                ),
-                critical=int(row["critical"]) if row["critical"] is not None else None,
-            )
-        )
+        result.setdefault(key, []).append(_bingo_leaderboard_entry_from_row(row))
     for entries in result.values():
         entries.sort(key=lambda entry: (-entry.score, entry.display_name.casefold()))
     return result
