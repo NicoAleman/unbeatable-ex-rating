@@ -59,7 +59,7 @@ from rating.bingo_chart_scoring import (
 from rating.bingo_upscore import build_chart_upscore_payload
 from rating.calculator import ex_accuracy_percent
 from rating.constants import SCORE_SOURCE_IN_GAME
-from rating.bingo_proof_storage import create_bingo_proof_signed_url
+from rating.bingo_proof_storage import prefetch_bingo_proof_signed_urls
 from rating.constants import SCORE_SOURCE_IN_GAME, SCORE_SOURCE_SUBMISSION
 from rating.formatting import format_difficulty_display_name
 from rating.supabase_config import supabase_configured, supabase_storage_configured
@@ -5977,20 +5977,58 @@ def _render_bingo_activity_feed_header(*, settings: BingoSettings) -> None:
             )
 
 
+def _collect_submission_proof_paths(
+    entries: list[BingoChartLeaderboardEntry],
+) -> list[str]:
+    paths: list[str] = []
+    seen: set[str] = set()
+    for entry in entries:
+        if entry.source != SCORE_SOURCE_SUBMISSION:
+            continue
+        path = str(entry.proof_path or "").strip()
+        if not path or path in seen:
+            continue
+        seen.add(path)
+        paths.append(path)
+    return paths
+
+
 def _build_bingo_chart_modal_payload(
     charts: list[BingoChart],
     entries_by_chart: dict[tuple[str, str], list[BingoChartLeaderboardEntry]],
     *,
     roster: dict[str, list[BingoTeamPlayer]],
     highlight_player_id: str | None = None,
+    sign_proofs: bool = False,
 ) -> dict[str, dict[str, str]]:
+    """Build chart modal HTML.
+
+    ``sign_proofs=False`` (default) skips Supabase signed-URL calls so the board
+    can paint quickly. Proof buttons keep ``data-proof-path``; signed URLs are
+    filled in when a chart scoreboard is refreshed.
+    """
     payload: dict[str, dict[str, str]] = {}
+    merged_by_key: dict[str, list[BingoChartLeaderboardEntry]] = {}
+    proof_urls: dict[str, str] = {}
+    if sign_proofs:
+        all_paths: list[str] = []
+        for chart in charts:
+            raw_entries = entries_by_chart.get((chart.song, chart.difficulty), [])
+            entries = merge_chart_leaderboard_with_roster(roster, raw_entries)
+            key = f"{chart.row},{chart.column}"
+            merged_by_key[key] = entries
+            all_paths.extend(_collect_submission_proof_paths(entries))
+        proof_urls = prefetch_bingo_proof_signed_urls(all_paths)
+
     for chart in charts:
-        raw_entries = entries_by_chart.get((chart.song, chart.difficulty), [])
-        entries = merge_chart_leaderboard_with_roster(roster, raw_entries)
+        key = f"{chart.row},{chart.column}"
+        if key in merged_by_key:
+            entries = merged_by_key[key]
+        else:
+            raw_entries = entries_by_chart.get((chart.song, chart.difficulty), [])
+            entries = merge_chart_leaderboard_with_roster(roster, raw_entries)
         entries_by_id = {entry.player_id: entry for entry in entries}
         difficulty = html.escape(_difficulty_label(chart.difficulty, chart.level))
-        key = f"{chart.row},{chart.column}"
         chart_payload: dict[str, str] = {
             "title_html": (
                 f'{html.escape(chart.display_name)} '
@@ -6001,6 +6039,7 @@ def _build_bingo_chart_modal_payload(
                 song=chart.song,
                 difficulty=chart.difficulty,
                 highlight_player_id=highlight_player_id,
+                proof_urls=proof_urls,
             ),
         }
         upscore_entries = {
@@ -6051,11 +6090,15 @@ def _emit_bingo_chart_refresh_payload(
     teams = load_bingo_teams_by_ex_rating()
     merged = merge_chart_leaderboard_with_roster(teams, entries)
     highlight_id = st.session_state.get("bingo_view_player_id")
+    proof_urls = prefetch_bingo_proof_signed_urls(
+        _collect_submission_proof_paths(merged)
+    )
     table_html = _render_bingo_chart_leaderboard_table_html(
         merged,
         song=chart.song,
         difficulty=chart.difficulty,
         highlight_player_id=highlight_id,
+        proof_urls=proof_urls,
     )
     entries_by_id = {entry.player_id: entry for entry in merged}
     upscore_entries = {
@@ -7549,6 +7592,7 @@ def _build_bingo_board_interactive_html(
           let currentModalRow = null;
           let currentModalCol = null;
           let modalRefreshPending = false;
+          let pendingProofPath = null;
           const MODAL_ANIM_MS = 220;
           {_BINGO_UPSCORE_CALCULATOR_JS}
 
@@ -7618,10 +7662,13 @@ def _build_bingo_board_interactive_html(
           function applyModalRefresh(payload) {{
             if (!payload || payload.row !== currentModalRow || payload.col !== currentModalCol) {{
               setModalRefreshPending(false);
+              pendingProofPath = null;
               return;
             }}
             const key = payload.row + "," + payload.col;
             const openPlayerId = openJudgementPlayerId;
+            const proofPathToOpen = pendingProofPath;
+            pendingProofPath = null;
             if (!modalData[key]) {{
               modalData[key] = {{}};
             }}
@@ -7649,6 +7696,14 @@ def _build_bingo_board_interactive_html(
             }}
             updateSubtitle();
             setModalRefreshPending(false);
+            if (proofPathToOpen) {{
+              const proofBtn = Array.from(
+                bodyEl.querySelectorAll(".bingo-chart-modal-proof-btn")
+              ).find((btn) => btn.dataset.proofPath === proofPathToOpen);
+              if (proofBtn && proofBtn.dataset.proofUrl) {{
+                openProofModal(proofBtn.dataset.proofUrl);
+              }}
+            }}
           }}
 
           function requestModalRefresh() {{
@@ -7833,6 +7888,7 @@ def _build_bingo_board_interactive_html(
             closeJudgementRows();
             currentModalRow = null;
             currentModalCol = null;
+            pendingProofPath = null;
             setModalRefreshPending(false);
             if (lastFocused && typeof lastFocused.focus === "function") {{
               lastFocused.focus();
@@ -7936,6 +7992,12 @@ def _build_bingo_board_interactive_html(
               const proofUrl = proofBtn.dataset.proofUrl;
               if (proofUrl) {{
                 openProofModal(proofUrl);
+                return;
+              }}
+              const proofPath = proofBtn.dataset.proofPath;
+              if (proofPath) {{
+                pendingProofPath = proofPath;
+                requestModalRefresh();
               }}
               return;
             }}
@@ -8017,7 +8079,11 @@ def _render_bingo_board_component(
     )
 
 
-def _bingo_chart_proof_icon_html(entry: BingoChartLeaderboardEntry) -> str:
+def _bingo_chart_proof_icon_html(
+    entry: BingoChartLeaderboardEntry,
+    *,
+    proof_url: str | None = None,
+) -> str:
     if entry.score <= 0:
         return ""
 
@@ -8031,20 +8097,23 @@ def _bingo_chart_proof_icon_html(entry: BingoChartLeaderboardEntry) -> str:
 
     if entry.source == SCORE_SOURCE_SUBMISSION:
         if entry.proof_path:
-            proof_url = create_bingo_proof_signed_url(entry.proof_path)
-            if proof_url:
-                return (
-                    '<button type="button" class="bingo-chart-modal-proof-btn" '
-                    f'data-proof-url="{html.escape(proof_url, quote=True)}" '
-                    'title="View submitted proof" aria-label="View submitted proof">'
-                    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" '
-                    'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" '
-                    'aria-hidden="true">'
-                    '<rect x="3" y="3" width="18" height="18" rx="2"></rect>'
-                    '<circle cx="8.5" cy="8.5" r="1.5"></circle>'
-                    '<path d="M21 15l-5-5L5 21"></path>'
-                    "</svg></button>"
-                )
+            path_attr = html.escape(str(entry.proof_path), quote=True)
+            url = str(proof_url or "").strip()
+            url_attr = (
+                f' data-proof-url="{html.escape(url, quote=True)}"' if url else ""
+            )
+            return (
+                '<button type="button" class="bingo-chart-modal-proof-btn" '
+                f'data-proof-path="{path_attr}"{url_attr} '
+                'title="View submitted proof" aria-label="View submitted proof">'
+                '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+                'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" '
+                'aria-hidden="true">'
+                '<rect x="3" y="3" width="18" height="18" rx="2"></rect>'
+                '<circle cx="8.5" cy="8.5" r="1.5"></circle>'
+                '<path d="M21 15l-5-5L5 21"></path>'
+                "</svg></button>"
+            )
         return (
             '<span class="bingo-chart-modal-proof-badge bingo-chart-modal-proof-badge--missing" '
             'title="No proof submitted" aria-label="No proof submitted">'
@@ -8152,6 +8221,7 @@ def _render_bingo_chart_leaderboard_table_html(
     song: str | None = None,
     difficulty: str | None = None,
     highlight_player_id: str | None = None,
+    proof_urls: dict[str, str] | None = None,
 ) -> str:
     if not entries:
         return (
@@ -8184,6 +8254,7 @@ def _render_bingo_chart_leaderboard_table_html(
         )
 
     colspan = _bingo_chart_modal_column_count(show_points=show_points)
+    url_by_path = proof_urls or {}
     rows: list[str] = []
     rank = 0
     for index, entry in enumerate(entries):
@@ -8194,7 +8265,11 @@ def _render_bingo_chart_leaderboard_table_html(
         team_color = TEAM_TEXT_COLORS.get(entry.team, "#eaeaea")
         player = html.escape(entry.display_name)
         score = html.escape(format_leader_score(entry.score))
-        proof_icon = _bingo_chart_proof_icon_html(entry)
+        proof_path = str(entry.proof_path or "").strip()
+        proof_icon = _bingo_chart_proof_icon_html(
+            entry,
+            proof_url=url_by_path.get(proof_path) if proof_path else None,
+        )
         row_classes = ["bingo-chart-modal-data-row"]
         if highlight_player_id is not None and entry.player_id == highlight_player_id:
             row_classes.append("bingo-chart-modal-row--highlighted")
