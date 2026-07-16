@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 import psycopg2
 import psycopg2.extras
@@ -23,6 +27,46 @@ TEAM_COLORS = {
     "Grace": "#d1242f",
     "Rest": "#1a7f37",
 }
+
+# Short-lived process cache so scoreboard + board fragments don't re-hit Postgres
+# for the same window on one page load. Completed day windows use a longer TTL.
+_QUERY_CACHE_LOCK = threading.Lock()
+_QUERY_CACHE: dict[str, tuple[float, Any]] = {}
+_LIVE_QUERY_CACHE_TTL_SECONDS = 20.0
+_CLOSED_QUERY_CACHE_TTL_SECONDS = 300.0
+
+
+def clear_bingo_query_cache() -> None:
+    with _QUERY_CACHE_LOCK:
+        _QUERY_CACHE.clear()
+
+
+def _cache_get(key: str) -> Any | None:
+    now = time.monotonic()
+    with _QUERY_CACHE_LOCK:
+        item = _QUERY_CACHE.get(key)
+        if item is None:
+            return None
+        expires_at, value = item
+        if expires_at <= now:
+            _QUERY_CACHE.pop(key, None)
+            return None
+        return value
+
+
+def _cache_put(key: str, value: Any, *, ttl_seconds: float) -> None:
+    expires_at = time.monotonic() + max(1.0, float(ttl_seconds))
+    with _QUERY_CACHE_LOCK:
+        _QUERY_CACHE[key] = (expires_at, value)
+
+
+def _dt_cache_token(value: datetime | None) -> str:
+    if value is None:
+        return ""
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc).isoformat()
+
 
 
 @dataclass(frozen=True)
@@ -303,6 +347,13 @@ def load_bingo_chart_standings_data(
     if start_time is None:
         return {}
 
+    cache_key = (
+        f"standings|{_dt_cache_token(start_time)}|{_dt_cache_token(end_time)}|{db_url or ''}"
+    )
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
+
     try:
         with _connect(db_url) as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
@@ -362,6 +413,12 @@ def load_bingo_chart_standings_data(
             roster=roster,
         )
         result[key] = (claim.team_totals, claim.player_points_by_team)
+    ttl = (
+        _CLOSED_QUERY_CACHE_TTL_SECONDS
+        if end_time is not None
+        else _LIVE_QUERY_CACHE_TTL_SECONDS
+    )
+    _cache_put(cache_key, result, ttl_seconds=ttl)
     return result
 
 
@@ -454,6 +511,13 @@ def load_all_bingo_chart_player_leaderboards(
     if start_time is None:
         return {}
 
+    cache_key = (
+        f"leaderboards|{_dt_cache_token(start_time)}|{_dt_cache_token(end_time)}|{db_url or ''}"
+    )
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
+
     try:
         with _connect(db_url) as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
@@ -522,6 +586,12 @@ def load_all_bingo_chart_player_leaderboards(
         result.setdefault(key, []).append(_bingo_leaderboard_entry_from_row(row))
     for entries in result.values():
         entries.sort(key=lambda entry: (-entry.score, entry.display_name.casefold()))
+    ttl = (
+        _CLOSED_QUERY_CACHE_TTL_SECONDS
+        if end_time is not None
+        else _LIVE_QUERY_CACHE_TTL_SECONDS
+    )
+    _cache_put(cache_key, result, ttl_seconds=ttl)
     return result
 
 
@@ -740,9 +810,29 @@ def load_bingo_square_claim_feed(
     if start_time is None or limit <= 0:
         return []
 
+    width_hint = int(board_width) if board_width is not None else None
+    if width_hint is not None:
+        cache_key = (
+            f"claim_feed|{_dt_cache_token(start_time)}|{width_hint}|{int(limit)}|{db_url or ''}"
+        )
+        cached = _cache_get(cache_key)
+        if cached is not None:
+            return cached
+
     settings = load_bingo_settings(db_url)
     if board_width is None:
         board_width = int(settings.board_width) if settings is not None else 5
+    else:
+        board_width = int(board_width)
+
+    cache_key = (
+        f"claim_feed|{_dt_cache_token(start_time)}|{int(board_width)}|{int(limit)}|{db_url or ''}"
+    )
+    if width_hint is None:
+        cached = _cache_get(cache_key)
+        if cached is not None:
+            return cached
+
     day_count = (
         max(1, int(settings.day_count))
         if settings is not None and settings.day_count is not None
@@ -905,7 +995,9 @@ def load_bingo_square_claim_feed(
         )
 
     events.reverse()
-    return events[:limit]
+    result = events[:limit]
+    _cache_put(cache_key, result, ttl_seconds=_LIVE_QUERY_CACHE_TTL_SECONDS)
+    return result
 
 
 def bingo_charts_on_board(
@@ -1783,12 +1875,32 @@ def compute_bingo_scoreboard(
     }
     totals = {team: 0 for team in TEAM_ORDER}
 
+    # Fetch closed-day + live standings in parallel (each is a separate Postgres round-trip).
+    standings_jobs: list[tuple[str, int | None, datetime | None]] = [
+        (f"day:{day}", day, bingo_day_end(settings.start_time, day))
+        for day in range(1, finished + 1)
+    ]
+    needs_live = in_progress is not None
+    if needs_live:
+        standings_jobs.append(("live", None, None))
+
+    standings_by_job: dict[str, dict] = {}
+    if standings_jobs:
+        def _load_job(job: tuple[str, int | None, datetime | None]):
+            job_key, _day, end_time = job
+            return job_key, load_bingo_chart_standings_data(
+                start_time=settings.start_time,
+                end_time=end_time,
+                db_url=db_url,
+            )
+
+        workers = max(1, min(8, len(standings_jobs)))
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            for job_key, standings in pool.map(_load_job, standings_jobs):
+                standings_by_job[job_key] = standings
+
     for day in range(1, finished + 1):
-        standings = load_bingo_chart_standings_data(
-            start_time=settings.start_time,
-            end_time=bingo_day_end(settings.start_time, day),
-            db_url=db_url,
-        )
+        standings = standings_by_job.get(f"day:{day}", {})
         day_scores = score_board_state(
             charts=charts,
             standings_data=standings,
@@ -1811,11 +1923,13 @@ def compute_bingo_scoreboard(
             day_count=day_count,
         )
         scoring_day = prospective_day if prospective_day is not None else in_progress
-        live_standings = load_bingo_chart_standings_data(
-            start_time=settings.start_time,
-            end_time=None,
-            db_url=db_url,
-        )
+        live_standings = standings_by_job.get("live")
+        if live_standings is None:
+            live_standings = load_bingo_chart_standings_data(
+                start_time=settings.start_time,
+                end_time=None,
+                db_url=db_url,
+            )
         live_scores = score_board_state(
             charts=charts,
             standings_data=live_standings,

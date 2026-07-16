@@ -49,6 +49,7 @@ from rating.bingo import (
     load_bingo_settings,
     load_bingo_square_claim_feed,
     load_bingo_teams_by_ex_rating,
+    clear_bingo_query_cache,
     submit_bingo_score,
 )
 from rating.bingo_chart_scoring import (
@@ -128,12 +129,14 @@ def _cached_bingo_teams():
 @st.cache_data(ttl=60, show_spinner=False)
 def _cached_bingo_claim_feed(
     start_time_iso: str,
+    board_width: int,
     limit: int = BINGO_ACTIVITY_FEED_LIMIT,
 ):
     start_time = datetime.fromisoformat(start_time_iso)
     return load_bingo_square_claim_feed(
         start_time=start_time,
         charts=_cached_bingo_charts(),
+        board_width=int(board_width),
         limit=limit,
     )
 
@@ -181,6 +184,7 @@ def _request_bingo_app_rerun(*, touch_live: bool = True) -> None:
     _cached_bingo_charts.clear()
     _cached_bingo_teams.clear()
     _cached_bingo_claim_feed.clear()
+    clear_bingo_query_cache()
     st.session_state[BINGO_APP_RERUN_KEY] = True
 
 
@@ -263,12 +267,23 @@ def _format_bingo_updated_ago(updated_at: float, *, now: float | None = None) ->
 def _inject_bingo_board_layout_css(board_width: str) -> None:
     st.markdown(
         f"""
+        <div class="bingo-hidden-style-slot" aria-hidden="true"></div>
         <style>
+        [data-testid="stElementContainer"]:has(.bingo-hidden-style-slot),
+        .stElementContainer:has(.bingo-hidden-style-slot) {{
+            display: none !important;
+            height: 0 !important;
+            min-height: 0 !important;
+            margin: 0 !important;
+            padding: 0 !important;
+            border: 0 !important;
+            overflow: hidden !important;
+        }}
         .st-key-bingo_board_viewport,
         .st-key-bingo-board-viewport {{
             width: min(100%, {board_width}) !important;
             max-width: 100% !important;
-            margin: -2.1rem auto 0 !important;
+            margin: -0.85rem auto 0 !important;
             padding: 0 !important;
         }}
         .st-key-bingo_board_viewport [data-testid="stVerticalBlockBorderWrapper"],
@@ -510,11 +525,22 @@ def _render_bingo_player_view_controls(
     players = _flatten_bingo_players(teams)
     st.markdown(
         """
+        <div class="bingo-hidden-style-slot" aria-hidden="true"></div>
         <style>
+        [data-testid="stElementContainer"]:has(.bingo-hidden-style-slot),
+        .stElementContainer:has(.bingo-hidden-style-slot) {
+            display: none !important;
+            height: 0 !important;
+            min-height: 0 !important;
+            margin: 0 !important;
+            padding: 0 !important;
+            border: 0 !important;
+            overflow: hidden !important;
+        }
         .st-key-bingo_player_view_shell {
             width: min(100%, 1100px);
             max-width: 28rem;
-            margin: 0 auto 0.55rem;
+            margin: 1.25rem auto 0 !important;
         }
         .st-key-bingo_player_view_shell [data-testid="stHorizontalBlock"] {
             align-items: end !important;
@@ -546,6 +572,14 @@ def _render_bingo_player_view_controls(
             border: none !important;
         }
         .bingo-view-player-id-marker { display: none; }
+        .st-key-bingo_player_view_shell [data-testid="stElementContainer"]:has(.bingo-view-player-id-marker) {
+            display: none !important;
+            height: 0 !important;
+            min-height: 0 !important;
+            margin: 0 !important;
+            padding: 0 !important;
+            overflow: hidden !important;
+        }
         </style>
         """,
         unsafe_allow_html=True,
@@ -654,6 +688,9 @@ def _render_bingo_player_view_controls(
             f'data-player-team="{marker_player_team}" '
             f'data-auto-player-board="{auto_attr}" hidden></span>',
             unsafe_allow_html=True,
+        )
+        _inject_scoreboard_player_row_highlight(
+            selected_player.team if selected_player is not None else None
         )
         return selected_player
 
@@ -3143,9 +3180,22 @@ def _inject_scoreboard_player_row_highlight(highlight_team: str | None) -> None:
           background-color: {row_bg} !important;
         }}
         """
+    # Style-only slot: hide the Streamlit element so it doesn't add vertical gap
+    # between player controls and the board.
     st.markdown(
         f"""
+        <div class="bingo-hidden-style-slot" aria-hidden="true"></div>
         <style>
+        [data-testid="stElementContainer"]:has(.bingo-hidden-style-slot),
+        .stElementContainer:has(.bingo-hidden-style-slot) {{
+          display: none !important;
+          height: 0 !important;
+          min-height: 0 !important;
+          margin: 0 !important;
+          padding: 0 !important;
+          border: 0 !important;
+          overflow: hidden !important;
+        }}
         {rule}
         </style>
         """,
@@ -4011,41 +4061,41 @@ def _render_bingo_activity_feed(*, settings: BingoSettings) -> None:
 
     with st.container(key="bingo_activity_feed"):
         _render_bingo_activity_feed_header(settings=settings)
-        try:
-            assert settings.start_time is not None
-            events = load_bingo_square_claim_feed(
-                start_time=settings.start_time,
-                charts=_cached_bingo_charts(),
-                board_width=int(settings.board_width),
-                limit=BINGO_ACTIVITY_FEED_LIMIT,
-            )
-        except Exception as exc:
-            st.warning(f"Could not load activity feed: {exc}")
-            return
+        with st.spinner("Loading activity feed…", width="stretch"):
+            try:
+                assert settings.start_time is not None
+                events = _cached_bingo_claim_feed(
+                    start_time_iso=settings.start_time.isoformat(),
+                    board_width=int(settings.board_width),
+                    limit=BINGO_ACTIVITY_FEED_LIMIT,
+                )
+            except Exception as exc:
+                st.warning(f"Could not load activity feed: {exc}")
+                return
 
-        if not events:
+            if not events:
+                st.markdown(
+                    '<p class="bingo-activity-empty">'
+                    "No activity yet. First team to score on a chart shows up here."
+                    "</p>",
+                    unsafe_allow_html=True,
+                )
+                return
+
+            items_html = "".join(_render_bingo_claim_feed_item(event) for event in events)
+            scrollable = len(events) > BINGO_ACTIVITY_FEED_VISIBLE_COUNT
+            viewport_class = (
+                "bingo-activity-viewport bingo-activity-viewport--scrollable"
+                if scrollable
+                else "bingo-activity-viewport"
+            )
             st.markdown(
-                '<p class="bingo-activity-empty">'
-                "No activity yet. First team to score on a chart shows up here."
-                "</p>",
+                f'<div class="{viewport_class}">'
+                f'<div class="bingo-activity-feed">{items_html}</div>'
+                "</div>",
                 unsafe_allow_html=True,
             )
-            return
-
-        items_html = "".join(_render_bingo_claim_feed_item(event) for event in events)
-        scrollable = len(events) > BINGO_ACTIVITY_FEED_VISIBLE_COUNT
-        viewport_class = (
-            "bingo-activity-viewport bingo-activity-viewport--scrollable"
-            if scrollable
-            else "bingo-activity-viewport"
-        )
-        st.markdown(
-            f'<div class="{viewport_class}">'
-            f'<div class="bingo-activity-feed">{items_html}</div>'
-            "</div>",
-            unsafe_allow_html=True,
-        )
-        _mount_bingo_activity_time_ticker()
+            _mount_bingo_activity_time_ticker()
 
 
 def _bingo_player_option_label(player: BingoTeamPlayer) -> str:
@@ -6133,22 +6183,6 @@ def _render_bingo_chart_refresh_bridge(
 ) -> None:
     """Hidden per-chart refresh buttons; reruns alone to reload one scoreboard."""
     board_charts = bingo_charts_on_board(charts, max(1, int(settings.board_width)))
-    st.markdown(
-        """
-        <style>
-        .st-key-bingo_chart_refresh_shell,
-        .st-key-bingo-chart-refresh-shell {
-            display: none !important;
-            visibility: hidden !important;
-            height: 0 !important;
-            overflow: hidden !important;
-            margin: 0 !important;
-            padding: 0 !important;
-        }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
 
     def make_handler(chart_row: int, chart_col: int):
         def handler() -> None:
@@ -6162,7 +6196,32 @@ def _render_bingo_chart_refresh_bridge(
 
         return handler
 
+    # Keep styles + buttons inside the zero-height shell so this fragment
+    # does not add vertical gap between player controls and the board.
     with st.container(key="bingo_chart_refresh_shell"):
+        st.markdown(
+            """
+            <style>
+            .st-key-bingo_chart_refresh_shell,
+            .st-key-bingo-chart-refresh-shell,
+            .stElementContainer:has(.st-key-bingo_chart_refresh_shell),
+            .stElementContainer:has(.st-key-bingo-chart-refresh-shell),
+            [data-testid="stElementContainer"]:has(.st-key-bingo_chart_refresh_shell),
+            [data-testid="stElementContainer"]:has(.st-key-bingo-chart-refresh-shell) {
+                display: none !important;
+                visibility: hidden !important;
+                height: 0 !important;
+                min-height: 0 !important;
+                max-height: 0 !important;
+                overflow: hidden !important;
+                margin: 0 !important;
+                padding: 0 !important;
+                border: 0 !important;
+            }
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
         for chart in board_charts:
             st.button(
                 f"Refresh chart {chart.row},{chart.column}",
@@ -8382,9 +8441,8 @@ def _render_bingo_player_controls_fragment(
     )
     if view_player is None:
         view_player = _resolve_bingo_view_player(teams)
-    _inject_scoreboard_player_row_highlight(
-        view_player.team if view_player is not None else None
-    )
+        if view_player is not None:
+            _inject_scoreboard_player_row_highlight(view_player.team)
 
 
 @st.fragment
@@ -8411,16 +8469,12 @@ def _render_bingo_board_fragment(
     st.session_state.bingo_board_mode = mode
     show_live = completed_days < day_count
 
-    banner_slot = st.empty()
     if view_day is not None:
-        with banner_slot.container():
-            _render_bingo_historical_banner(
-                view_day,
-                day_count=day_count,
-                show_live_button=show_live,
-            )
-    else:
-        banner_slot.empty()
+        _render_bingo_historical_banner(
+            view_day,
+            day_count=day_count,
+            show_live_button=show_live,
+        )
 
     width = max(1, int(settings.board_width))
     end_time = (
@@ -8500,7 +8554,6 @@ def _render_bingo_board_fragment(
         leaderboard_by_chart=leaderboard_by_chart,
     )
     board_width = _bingo_board_width_expr(rows=rows)
-    _inject_bingo_board_layout_css(board_width)
     modal_payload = _build_bingo_chart_modal_payload(
         charts,
         leaderboard_by_chart,
@@ -8513,6 +8566,7 @@ def _render_bingo_board_fragment(
         else None
     )
     with st.container(key="bingo_board_viewport"):
+        _inject_bingo_board_layout_css(board_width)
         _render_bingo_board_toolbar(
             show_refresh=view_day is None and _bingo_game_is_active(settings=settings),
         )
@@ -8560,6 +8614,7 @@ def _commit_pending_bingo_submission() -> None:
         _cached_bingo_charts.clear()
         _cached_bingo_teams.clear()
         _cached_bingo_claim_feed.clear()
+        clear_bingo_query_cache()
     else:
         st.session_state.bingo_submit_error = message
 
@@ -8569,20 +8624,43 @@ def render_bingo_board() -> None:
         st.warning("Supabase is not configured, so the Bingo board cannot load.")
         return
 
+    st.markdown(
+        """
+        <style>
+        /* Spinner defaults to content-width (left-aligned); stretch + center the row */
+        [data-testid="stSpinner"],
+        [data-testid="stSpinner"] > div,
+        .stSpinner,
+        .stSpinner > div {
+            width: 100% !important;
+            max-width: 100% !important;
+        }
+        [data-testid="stSpinner"] div,
+        .stSpinner div {
+            justify-content: center !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
     _maybe_rerun_bingo_app()
 
     live_view = st.session_state.get("bingo_view_day") is None
 
     saving = bool(st.session_state.get("bingo_submission_in_progress"))
-    spinner = st.spinner("Saving score…") if saving else nullcontext()
+    spinner = (
+        st.spinner("Saving score…", width="stretch") if saving else nullcontext()
+    )
     with spinner:
         if saving:
             _commit_pending_bingo_submission()
 
         try:
-            settings = load_bingo_settings()
-            charts = _cached_bingo_charts()
-            teams = _cached_bingo_teams()
+            with st.spinner("Loading Bingo…", width="stretch"):
+                settings = load_bingo_settings()
+                charts = _cached_bingo_charts()
+                teams = _cached_bingo_teams()
         except Exception as exc:
             st.error(f"Failed to load Bingo data: {exc}")
             return
@@ -8598,28 +8676,8 @@ def render_bingo_board() -> None:
         if live_view and _bingo_supports_live_refresh(settings=settings):
             _render_bingo_auto_refresh_trigger()
 
-        scoreboard: BingoScoreboard | None = None
-        final_standings: BingoFinalStandings | None = None
-        if charts and settings.start_time is not None and settings.day_count is not None:
-            try:
-                scoreboard = compute_bingo_scoreboard(
-                    settings=settings,
-                    charts=charts,
-                )
-            except Exception:
-                scoreboard = None
-            completed_for_winner = completed_bingo_days(
-                start_time=settings.start_time,
-                day_count=int(settings.day_count),
-            )
-            if (
-                scoreboard is not None
-                and completed_for_winner >= int(settings.day_count)
-            ):
-                final_standings = compute_bingo_final_standings(
-                    scoreboard=scoreboard,
-                )
-
+        # Paint the header before the heavy scoreboard/board queries so the page
+        # doesn't sit blank while Postgres is busy.
         _render_bingo_header(
             settings,
             live_view=live_view and _bingo_supports_live_refresh(settings=settings),
@@ -8628,7 +8686,7 @@ def render_bingo_board() -> None:
                 if live_view and game_is_active
                 else None
             ),
-            final_standings=final_standings,
+            final_standings=None,
         )
 
         if not charts:
@@ -8644,31 +8702,58 @@ def render_bingo_board() -> None:
 
         st.markdown(build_bingo_board_css(), unsafe_allow_html=True)
 
-        if scoreboard is None:
-            try:
-                scoreboard = compute_bingo_scoreboard(
-                    settings=settings,
-                    charts=charts,
+        scoreboard: BingoScoreboard | None = None
+        final_standings: BingoFinalStandings | None = None
+        with st.spinner("Loading Bingo Board…", width="stretch"):
+            if charts and settings.start_time is not None and settings.day_count is not None:
+                try:
+                    scoreboard = compute_bingo_scoreboard(
+                        settings=settings,
+                        charts=charts,
+                    )
+                except Exception as exc:
+                    st.error(f"Failed to load Bingo scoreboard: {exc}")
+                    scoreboard = None
+                completed_for_winner = completed_bingo_days(
+                    start_time=settings.start_time,
+                    day_count=int(settings.day_count),
                 )
-            except Exception as exc:
-                st.error(f"Failed to load Bingo scoreboard: {exc}")
-                scoreboard = None
+                if (
+                    scoreboard is not None
+                    and completed_for_winner >= int(settings.day_count)
+                ):
+                    final_standings = compute_bingo_final_standings(
+                        scoreboard=scoreboard,
+                    )
 
-        _render_bingo_player_controls_fragment(
-            settings=settings,
-            charts=charts,
-            completed_days=completed_days,
-        )
-        _render_bingo_chart_refresh_bridge(
-            settings=settings,
-            charts=charts,
-            completed_days=completed_days,
-        )
-        _render_bingo_board_fragment(
-            settings=settings,
-            charts=charts,
-            completed_days=completed_days,
-        )
+            if final_standings is not None:
+                # Game is over — replace the early header with the podium version.
+                _render_bingo_header(
+                    settings,
+                    live_view=live_view and _bingo_supports_live_refresh(settings=settings),
+                    updated_ms=(
+                        int(float(st.session_state.bingo_last_updated) * 1000)
+                        if live_view and game_is_active
+                        else None
+                    ),
+                    final_standings=final_standings,
+                )
+
+            _render_bingo_player_controls_fragment(
+                settings=settings,
+                charts=charts,
+                completed_days=completed_days,
+            )
+            _render_bingo_board_fragment(
+                settings=settings,
+                charts=charts,
+                completed_days=completed_days,
+            )
+            _render_bingo_chart_refresh_bridge(
+                settings=settings,
+                charts=charts,
+                completed_days=completed_days,
+            )
         if scoreboard is not None:
             _render_bingo_scoreboard(
                 scoreboard,
