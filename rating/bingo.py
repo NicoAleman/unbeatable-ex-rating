@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -1875,29 +1874,22 @@ def compute_bingo_scoreboard(
     }
     totals = {team: 0 for team in TEAM_ORDER}
 
-    # Fetch closed-day + live standings in parallel (each is a separate Postgres round-trip).
-    standings_jobs: list[tuple[str, int | None, datetime | None]] = [
-        (f"day:{day}", day, bingo_day_end(settings.start_time, day))
-        for day in range(1, finished + 1)
-    ]
-    needs_live = in_progress is not None
-    if needs_live:
-        standings_jobs.append(("live", None, None))
-
+    # Load day windows one at a time. Parallel connects were exhausting the
+    # Supabase session pool (pool_size 15). Process-level standings cache still
+    # makes repeat loads cheap.
     standings_by_job: dict[str, dict] = {}
-    if standings_jobs:
-        def _load_job(job: tuple[str, int | None, datetime | None]):
-            job_key, _day, end_time = job
-            return job_key, load_bingo_chart_standings_data(
-                start_time=settings.start_time,
-                end_time=end_time,
-                db_url=db_url,
-            )
-
-        workers = max(1, min(8, len(standings_jobs)))
-        with ThreadPoolExecutor(max_workers=workers) as pool:
-            for job_key, standings in pool.map(_load_job, standings_jobs):
-                standings_by_job[job_key] = standings
+    for day in range(1, finished + 1):
+        standings_by_job[f"day:{day}"] = load_bingo_chart_standings_data(
+            start_time=settings.start_time,
+            end_time=bingo_day_end(settings.start_time, day),
+            db_url=db_url,
+        )
+    if in_progress is not None:
+        standings_by_job["live"] = load_bingo_chart_standings_data(
+            start_time=settings.start_time,
+            end_time=None,
+            db_url=db_url,
+        )
 
     for day in range(1, finished + 1):
         standings = standings_by_job.get(f"day:{day}", {})
