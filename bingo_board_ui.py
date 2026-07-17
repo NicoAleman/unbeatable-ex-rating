@@ -126,21 +126,6 @@ def _cached_bingo_teams():
     return load_bingo_teams_by_ex_rating()
 
 
-@st.cache_data(ttl=60, show_spinner=False)
-def _cached_bingo_claim_feed(
-    start_time_iso: str,
-    board_width: int,
-    limit: int = BINGO_ACTIVITY_FEED_LIMIT,
-):
-    start_time = datetime.fromisoformat(start_time_iso)
-    return load_bingo_square_claim_feed(
-        start_time=start_time,
-        charts=_cached_bingo_charts(),
-        board_width=int(board_width),
-        limit=limit,
-    )
-
-
 BINGO_APP_RERUN_KEY = "bingo_app_rerun_requested"
 BINGO_AUTO_REFRESH_STALE_SECONDS = 600
 
@@ -183,7 +168,6 @@ def _request_bingo_app_rerun(*, touch_live: bool = True) -> None:
         _touch_bingo_live_updated()
     _cached_bingo_charts.clear()
     _cached_bingo_teams.clear()
-    _cached_bingo_claim_feed.clear()
     clear_bingo_query_cache()
     st.session_state[BINGO_APP_RERUN_KEY] = True
 
@@ -4064,8 +4048,9 @@ def _render_bingo_activity_feed(*, settings: BingoSettings) -> None:
         with st.spinner("Loading activity feed…", width="stretch"):
             try:
                 assert settings.start_time is not None
-                events = _cached_bingo_claim_feed(
-                    start_time_iso=settings.start_time.isoformat(),
+                events = load_bingo_square_claim_feed(
+                    start_time=settings.start_time,
+                    charts=_cached_bingo_charts(),
                     board_width=int(settings.board_width),
                     limit=BINGO_ACTIVITY_FEED_LIMIT,
                 )
@@ -8639,7 +8624,6 @@ def _commit_pending_bingo_submission() -> None:
         _touch_bingo_live_updated()
         _cached_bingo_charts.clear()
         _cached_bingo_teams.clear()
-        _cached_bingo_claim_feed.clear()
         clear_bingo_query_cache()
     else:
         st.session_state.bingo_submit_error = message
