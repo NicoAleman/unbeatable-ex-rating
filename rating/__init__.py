@@ -1,4 +1,4 @@
-"""Unbeatable arcade rating calculations."""
+"""UNBEATABLE arcade rating calculations."""
 
 from rating.board import get_rating_boards, write_rating_board
 from rating.calculator import build_ratings

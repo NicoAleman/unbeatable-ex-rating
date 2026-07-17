@@ -1,4 +1,4 @@
-"""Unbeatable EX Rating — web UI (Streamlit)."""
+"""UNBEATABLE EX Rating — web UI (Streamlit)."""
 
 import contextlib
 import hashlib
@@ -144,7 +144,7 @@ def format_time_ago(value: datetime) -> str:
 
 
 st.set_page_config(
-    page_title="Unbeatable EX Rating",
+    page_title="UNBEATABLE EX Rating",
     page_icon="⭐",
     layout="wide",
 )
@@ -1869,7 +1869,7 @@ def _render_main_tools_nav() -> None:
 _init_app_session_state()
 
 _render_page_header(
-    "Unbeatable EX Rating",
+    "UNBEATABLE EX Rating",
     "A Community-Created EX Rating System by FacadeNico",
     divider_margin_bottom_rem=0.5,
 )
