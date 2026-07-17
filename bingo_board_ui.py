@@ -3669,8 +3669,11 @@ def _render_bingo_point_impacts_html(
 
 
 def _render_bingo_claim_feed_item(event: BingoSquareClaimEvent) -> str:
-    team_color = TEAM_TEXT_COLORS.get(event.team, "#eaeaea")
-    tint = TEAM_ACTIVITY_TINTS.get(event.team, "rgba(234, 234, 234, 0.06)")
+    receiving_team = event.team
+    player_team = getattr(event, "player_team", None) or receiving_team
+    name_color = TEAM_TEXT_COLORS.get(player_team, "#eaeaea")
+    row_color = TEAM_TEXT_COLORS.get(receiving_team, "#eaeaea")
+    tint = TEAM_ACTIVITY_TINTS.get(receiving_team, "rgba(234, 234, 234, 0.06)")
     player = html.escape(event.player_display_name)
     chart = html.escape(
         f"{event.chart_display_name} "
@@ -3679,6 +3682,17 @@ def _render_bingo_claim_feed_item(event: BingoSquareClaimEvent) -> str:
     time_html = _bingo_activity_time_html(event.created_at)
     if event.prev_team is None:
         action = f'claimed <span class="bingo-activity-chart">{chart}</span>'
+    elif player_team != receiving_team:
+        prev_color = TEAM_TEXT_COLORS.get(event.prev_team, "#eaeaea")
+        prev = html.escape(event.prev_team.upper())
+        to_color = TEAM_TEXT_COLORS.get(receiving_team, "#eaeaea")
+        to_team = html.escape(receiving_team.upper())
+        action = (
+            f'flipped <span class="bingo-activity-chart">{chart}</span> from '
+            f'<span class="bingo-activity-team" style="color:{prev_color};">{prev}</span>'
+            f' to '
+            f'<span class="bingo-activity-team" style="color:{to_color};">{to_team}</span>'
+        )
     else:
         prev_color = TEAM_TEXT_COLORS.get(event.prev_team, "#eaeaea")
         prev = html.escape(event.prev_team.upper())
@@ -3706,11 +3720,11 @@ def _render_bingo_claim_feed_item(event: BingoSquareClaimEvent) -> str:
     )
     return (
         f'<div class="bingo-activity-item" style="'
-        f"border-left-color:{team_color};"
+        f"border-left-color:{row_color};"
         f"background:linear-gradient(90deg,{tint} 0%,rgba(10,18,36,0.28) 42%,rgba(10,18,36,0.18) 100%);"
         '">'
-        f'<span class="bingo-activity-player" style="color:{team_color};" '
-        f'title="{html.escape(event.team)}">{player}</span>'
+        f'<span class="bingo-activity-player" style="color:{name_color};" '
+        f'title="{html.escape(player_team)}">{player}</span>'
         f'<span class="bingo-activity-action">{action}{badges_html}</span>'
         f"{_render_bingo_point_impacts_html(event.point_impacts)}"
         f"{time_html}"

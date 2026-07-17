@@ -163,7 +163,12 @@ def _bingo_leaderboard_entry_from_row(row) -> BingoChartLeaderboardEntry:
 
 @dataclass(frozen=True)
 class BingoSquareClaimEvent:
-    """A team taking a square that was empty or held by another team."""
+    """A square's leading team changing because of a submitted score.
+
+    ``team`` is the new leading (receiving) team. ``player_team`` is the team of
+    the player whose score caused the change — these differ when a v2 placement
+    reshuffle hands the square to another team.
+    """
 
     song: str
     difficulty: str
@@ -175,6 +180,7 @@ class BingoSquareClaimEvent:
     prev_team: str | None
     player_id: str
     player_display_name: str
+    player_team: str
     score: int
     created_at: datetime
     formed_bingo: bool = False
@@ -186,6 +192,11 @@ class BingoSquareClaimEvent:
     @property
     def is_flip(self) -> bool:
         return self.prev_team is not None
+
+    @property
+    def is_cross_team_flip(self) -> bool:
+        """True when the scorer's team is not the team that received the square."""
+        return self.is_flip and self.player_team != self.team
 
 
 def load_bingo_settings(db_url: str | None = None) -> BingoSettings | None:
@@ -810,8 +821,10 @@ def load_bingo_square_claim_feed(
     """Replay bingo_scores chronologically and emit square claim / flip events.
 
     An event is recorded when a score causes a square's leading team to change
-    from uncontested → a team, or from one team → another. Events also note
-    when that claim newly forms a bingo, 4-in-a-row, or group capture.
+    from uncontested → a team, or from one team → another — including v2 cases
+    where the scoring player's team is not the new leader (placement reshuffle).
+    Events also note when that claim newly forms a bingo, 4-in-a-row, or group
+    capture for the receiving team.
     """
     if start_time is None or limit <= 0:
         return []
@@ -906,15 +919,9 @@ def load_bingo_square_claim_feed(
         if previous is not None and score <= previous[1]:
             continue
 
-        # Snapshot achievements before this score lands.
+        # Snapshot board state before this score lands.
         prev_coord_leaders = _leaders_by_coord_from_charts(board_charts, leaders)
         prev_runs = find_bingo_runs(prev_coord_leaders, rows=rows, cols=cols)
-        prev_bingos, prev_fours = _run_keys_for_cell(
-            prev_runs,
-            row=chart.row,
-            column=chart.column,
-            team=team,
-        )
         prev_totals, prev_best_lists = _standings_maps_from_player_bests(
             bests_by_chart, roster=roster
         )
@@ -935,17 +942,21 @@ def load_bingo_square_claim_feed(
 
         if new_leader is None or new_leader == prev_leader:
             continue
-        # Only count when the scoring team becomes the new leader.
-        if new_leader != team:
-            continue
 
+        # Achievements / badges belong to the team that received the square.
+        prev_bingos, prev_fours = _run_keys_for_cell(
+            prev_runs,
+            row=chart.row,
+            column=chart.column,
+            team=new_leader,
+        )
         new_coord_leaders = _leaders_by_coord_from_charts(board_charts, leaders)
         new_runs = find_bingo_runs(new_coord_leaders, rows=rows, cols=cols)
         new_bingos, new_fours = _run_keys_for_cell(
             new_runs,
             row=chart.row,
             column=chart.column,
-            team=team,
+            team=new_leader,
         )
         new_totals, new_best_lists = _standings_maps_from_player_bests(
             bests_by_chart, roster=roster
@@ -987,14 +998,15 @@ def load_bingo_square_claim_feed(
                 prev_team=prev_leader,
                 player_id=player_id,
                 player_display_name=str(row["display_name"]),
+                player_team=team,
                 score=score,
                 created_at=created_at,
                 formed_bingo=bool(new_bingos - prev_bingos),
                 formed_four=bool(new_fours - prev_fours),
                 captured_group=(
                     chart.group is not None
-                    and new_group_owner == team
-                    and prev_group_owner != team
+                    and new_group_owner == new_leader
+                    and prev_group_owner != new_leader
                 ),
                 point_impacts=point_impacts,
             )
