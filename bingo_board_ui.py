@@ -2691,6 +2691,9 @@ def build_bingo_board_css() -> str:
     .bingo-chart-completions-modal .bingo-chart-modal-panel {{
         width: min(100%, 960px);
     }}
+    .bingo-point-counts-modal .bingo-chart-modal-panel {{
+        width: min(100%, 960px);
+    }}
     {_BINGO_CHART_MODAL_SCROLLBAR_CSS}
     .bingo-chart-modal-close {{
         position: absolute;
@@ -5277,6 +5280,8 @@ def _render_bingo_chart_completions(
     teams: dict[str, list[BingoTeamPlayer]],
     settings: BingoSettings,
     highlight_player_id: str | None = None,
+    leaderboard_by_chart: dict[tuple[str, str], list[BingoChartLeaderboardEntry]]
+    | None = None,
 ) -> None:
     if settings.start_time is None:
         return
@@ -5287,9 +5292,10 @@ def _render_bingo_chart_completions(
         return
 
     try:
-        leaderboard_by_chart = load_all_bingo_chart_player_leaderboards(
-            start_time=settings.start_time,
-        )
+        if leaderboard_by_chart is None:
+            leaderboard_by_chart = load_all_bingo_chart_player_leaderboards(
+                start_time=settings.start_time,
+            )
     except Exception as exc:
         st.error(f"Failed to load chart completions: {exc}")
         return
@@ -5312,9 +5318,9 @@ def _render_bingo_chart_completions(
         """
         <style>
         .st-key-bingo_chart_completions_launch {
-            width: min(100%, 1100px);
+            width: 100%;
             max-width: 100%;
-            margin: 0.35rem auto 0.5rem;
+            margin: 0;
         }
         .st-key-bingo_chart_completions_launch [data-testid="stElementContainer"] {
             margin: 0 !important;
@@ -5510,6 +5516,742 @@ def _render_bingo_chart_completions(
               if (openBtn) {{
                 openBtn.onclick = function () {{
                   parentWin.__bingoOpenCompletionsOverlay(overlayDoc);
+                }};
+              }}
+            }})();
+            </script>
+            """,
+            height=52,
+            scrolling=False,
+        )
+
+
+def _bingo_player_point_totals(
+    *,
+    board_charts: list[BingoChart],
+    leaderboard_by_chart: dict[tuple[str, str], list[BingoChartLeaderboardEntry]],
+    teams: dict[str, list[BingoTeamPlayer]],
+) -> dict[str, float]:
+    """Return {player_id: total claim points} summed across all board squares."""
+    totals: dict[str, float] = {
+        player.player_id: 0.0 for player in _flatten_bingo_players(teams)
+    }
+    use_v2 = bingo_scoring_version() == "v2"
+    for chart in board_charts:
+        entries = merge_chart_leaderboard_with_roster(
+            teams,
+            leaderboard_by_chart.get((chart.song, chart.difficulty), []),
+        )
+        players = {
+            entry.player_id: (entry.team, int(entry.score)) for entry in entries
+        }
+        if not players:
+            continue
+        if use_v2:
+            breakdowns = compute_chart_player_point_breakdowns(
+                song=chart.song,
+                difficulty=chart.difficulty,
+                players=players,
+            )
+            for player_id, breakdown in breakdowns.items():
+                if player_id not in totals:
+                    continue
+                totals[player_id] += float(breakdown.accuracy_points) + float(
+                    breakdown.placement_bonus
+                )
+        else:
+            for player_id, (_team, score) in players.items():
+                if player_id not in totals:
+                    continue
+                totals[player_id] += float(int(score))
+    return totals
+
+
+def _bingo_competition_ranks_by_points(
+    players: list[BingoTeamPlayer],
+    *,
+    points_by_player: dict[str, float],
+) -> dict[str, int]:
+    ordered = sorted(
+        players,
+        key=lambda player: (
+            -points_by_player.get(player.player_id, 0.0),
+            player.display_name.casefold(),
+        ),
+    )
+    ranks: dict[str, int] = {}
+    index = 0
+    while index < len(ordered):
+        points = points_by_player.get(ordered[index].player_id, 0.0)
+        next_index = index + 1
+        while (
+            next_index < len(ordered)
+            and points_by_player.get(ordered[next_index].player_id, 0.0) == points
+        ):
+            next_index += 1
+        rank = index + 1
+        for player in ordered[index:next_index]:
+            ranks[player.player_id] = rank
+        index = next_index
+    return ranks
+
+
+def _bingo_point_counts_shared_table_css() -> str:
+    return (
+        ".bingo-point-counts-teams {"
+        "display: grid;"
+        "grid-template-columns: repeat(3, minmax(0, 1fr));"
+        "gap: 1rem;"
+        "align-items: start;"
+        "}"
+        ".bingo-point-counts-team-heading {"
+        "font-size: 1.05rem;"
+        "font-weight: 800;"
+        "letter-spacing: 0.03em;"
+        "text-decoration: underline;"
+        "text-underline-offset: 0.14em;"
+        "margin: 0.85rem 0 0.55rem 0;"
+        "text-align: center;"
+        "}"
+        ".bingo-point-counts-overall-table,"
+        ".bingo-point-counts-team-table {"
+        "table-layout: fixed;"
+        "width: 100%;"
+        "}"
+        ".bingo-point-counts-overall-table .bingo-chart-modal-rank,"
+        ".bingo-point-counts-team-table .bingo-chart-modal-rank {"
+        "width: 2.5rem;"
+        "}"
+        ".bingo-point-counts-overall-table .bingo-chart-modal-score,"
+        ".bingo-point-counts-team-table .bingo-chart-modal-score {"
+        "width: 4.5rem;"
+        "}"
+        ".bingo-point-counts-overall-table .bingo-chart-modal-player,"
+        ".bingo-point-counts-team-table .bingo-chart-modal-player {"
+        "overflow: hidden;"
+        "text-overflow: ellipsis;"
+        "white-space: nowrap;"
+        "}"
+        ".bingo-point-counts-overall-table td,"
+        ".bingo-point-counts-team-table td {"
+        "white-space: nowrap;"
+        "}"
+        ".bingo-point-counts-team-table tfoot td {"
+        "border-bottom: none;"
+        "border-top: 1px solid rgba(234, 234, 234, 0.22);"
+        "font-weight: 800;"
+        "padding-top: 0.7rem;"
+        "}"
+        ".bingo-point-counts-toggle {"
+        "display: flex;"
+        "justify-content: center;"
+        "gap: 0.45rem;"
+        "margin: 0.15rem 0 0.85rem;"
+        "}"
+        ".bingo-point-counts-toggle-btn {"
+        "border: 1px solid rgba(234, 234, 234, 0.22);"
+        "background: rgba(8, 12, 28, 0.72);"
+        "color: rgba(234, 234, 234, 0.78);"
+        "border-radius: 999px;"
+        "padding: 0.28rem 0.85rem;"
+        "font-size: 0.86rem;"
+        "font-weight: 700;"
+        "cursor: pointer;"
+        "font-family: inherit;"
+        "}"
+        ".bingo-point-counts-toggle-btn.is-active {"
+        "background: rgba(110, 176, 255, 0.18);"
+        "border-color: rgba(110, 176, 255, 0.46);"
+        "color: #f5f5f5;"
+        "}"
+        ".bingo-point-counts-view[hidden] { display: none !important; }"
+        "@media (max-width: 820px) {"
+        ".bingo-point-counts-teams { grid-template-columns: 1fr; }"
+        "}"
+    )
+
+
+def _render_bingo_point_counts_overall_table_html(
+    teams: dict[str, list[BingoTeamPlayer]],
+    *,
+    points_by_player: dict[str, float],
+    highlight_player_id: str | None = None,
+) -> str:
+    players = _flatten_bingo_players(teams)
+    if not players:
+        return (
+            '<div class="bingo-chart-modal-empty">'
+            "No players are on the bingo roster yet."
+            "</div>"
+        )
+    ranks = _bingo_competition_ranks_by_points(
+        players, points_by_player=points_by_player
+    )
+    ordered = sorted(
+        players,
+        key=lambda player: (
+            ranks.get(player.player_id, 9999),
+            player.display_name.casefold(),
+        ),
+    )
+    rows: list[str] = []
+    for player in ordered:
+        points = points_by_player.get(player.player_id, 0.0)
+        team_color = TEAM_TEXT_COLORS.get(player.team, "#eaeaea")
+        row_attr = ""
+        if (
+            highlight_player_id is not None
+            and player.player_id == highlight_player_id
+        ):
+            row_attr = ' class="bingo-chart-modal-row--highlighted"'
+        rows.append(
+            f"<tr{row_attr}>"
+            f'<td class="bingo-chart-modal-rank">{ranks.get(player.player_id, "—")}</td>'
+            f'<td class="bingo-chart-modal-player" style="color:{team_color};" '
+            f'title="{html.escape(player.display_name, quote=True)}">'
+            f"{html.escape(player.display_name)}</td>"
+            f'<td class="bingo-chart-modal-score">'
+            f"{html.escape(format_bingo_points(points))}</td>"
+            "</tr>"
+        )
+    return (
+        '<div class="bingo-chart-modal-table-wrap">'
+        '<table class="bingo-chart-modal-table bingo-point-counts-overall-table">'
+        "<thead><tr>"
+        '<th class="bingo-chart-modal-rank">#</th>'
+        '<th class="bingo-chart-modal-player">Player</th>'
+        '<th class="bingo-chart-modal-score">Points</th>'
+        "</tr></thead>"
+        f"<tbody>{''.join(rows)}</tbody>"
+        "</table>"
+        "</div>"
+    )
+
+
+def _render_bingo_point_counts_teams_table_html(
+    teams: dict[str, list[BingoTeamPlayer]],
+    *,
+    points_by_player: dict[str, float],
+    highlight_player_id: str | None = None,
+) -> str:
+    if not any(teams.get(team) for team in TEAM_ORDER):
+        return (
+            '<div class="bingo-chart-modal-empty">'
+            "No players are on the bingo roster yet."
+            "</div>"
+        )
+
+    team_blocks: list[str] = []
+    for team in TEAM_ORDER:
+        players = list(teams.get(team, []))
+        if not players:
+            continue
+        ranks = _bingo_competition_ranks_by_points(
+            players, points_by_player=points_by_player
+        )
+        players.sort(
+            key=lambda player: (
+                ranks.get(player.player_id, 9999),
+                player.display_name.casefold(),
+            )
+        )
+        team_color = TEAM_TEXT_COLORS.get(team, "#eaeaea")
+        team_total = sum(
+            points_by_player.get(player.player_id, 0.0) for player in players
+        )
+        total_text = html.escape(format_bingo_points(team_total))
+        rows: list[str] = []
+        for player in players:
+            points = points_by_player.get(player.player_id, 0.0)
+            row_attr = ""
+            if (
+                highlight_player_id is not None
+                and player.player_id == highlight_player_id
+            ):
+                row_attr = ' class="bingo-chart-modal-row--highlighted"'
+            rows.append(
+                f"<tr{row_attr}>"
+                f'<td class="bingo-chart-modal-rank">{ranks.get(player.player_id, "—")}</td>'
+                f'<td class="bingo-chart-modal-player" style="color:{team_color};" '
+                f'title="{html.escape(player.display_name, quote=True)}">'
+                f"{html.escape(player.display_name)}</td>"
+                f'<td class="bingo-chart-modal-score">'
+                f"{html.escape(format_bingo_points(points))}</td>"
+                "</tr>"
+            )
+        team_blocks.append(
+            '<div class="bingo-point-counts-team-block">'
+            f'<div class="bingo-point-counts-team-heading" style="color:{team_color};">'
+            f"Team {html.escape(_team_label(team))}</div>"
+            '<div class="bingo-chart-modal-table-wrap">'
+            '<table class="bingo-chart-modal-table bingo-point-counts-team-table">'
+            "<thead><tr>"
+            '<th class="bingo-chart-modal-rank">#</th>'
+            '<th class="bingo-chart-modal-player">Player</th>'
+            '<th class="bingo-chart-modal-score">Points</th>'
+            "</tr></thead>"
+            f"<tbody>{''.join(rows)}</tbody>"
+            "<tfoot><tr>"
+            '<td class="bingo-chart-modal-rank"></td>'
+            '<td class="bingo-chart-modal-player">Total</td>'
+            f'<td class="bingo-chart-modal-score" style="color:{team_color};">'
+            f"{total_text}</td>"
+            "</tr></tfoot>"
+            "</table>"
+            "</div>"
+            "</div>"
+        )
+
+    return (
+        '<div class="bingo-point-counts-teams">'
+        f"{''.join(team_blocks)}"
+        "</div>"
+    )
+
+
+def _render_bingo_point_counts_panel_html(
+    teams: dict[str, list[BingoTeamPlayer]],
+    *,
+    points_by_player: dict[str, float],
+    highlight_player_id: str | None = None,
+) -> str:
+    overall_html = _render_bingo_point_counts_overall_table_html(
+        teams,
+        points_by_player=points_by_player,
+        highlight_player_id=highlight_player_id,
+    )
+    teams_html = _render_bingo_point_counts_teams_table_html(
+        teams,
+        points_by_player=points_by_player,
+        highlight_player_id=highlight_player_id,
+    )
+    return (
+        f"<style>{_bingo_point_counts_shared_table_css()}</style>"
+        '<div class="bingo-point-counts-toggle" role="tablist" aria-label="Point counts view">'
+        '<button type="button" class="bingo-point-counts-toggle-btn is-active" '
+        'data-point-counts-view="overall" role="tab" aria-selected="true">Overall</button>'
+        '<button type="button" class="bingo-point-counts-toggle-btn" '
+        'data-point-counts-view="teams" role="tab" aria-selected="false">By Team</button>'
+        "</div>"
+        '<div class="bingo-point-counts-view" data-point-counts-panel="overall">'
+        f"{overall_html}"
+        "</div>"
+        '<div class="bingo-point-counts-view" data-point-counts-panel="teams" hidden>'
+        f"{teams_html}"
+        "</div>"
+    )
+
+
+def _build_bingo_point_counts_overlay_document(*, table_html: str) -> str:
+    return f"""<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+html, body {{
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    background: transparent;
+    font-family: "Source Sans Pro", "Segoe UI", sans-serif;
+}}
+{_BINGO_CHART_MODAL_ANIMATION_CSS}
+{_BINGO_CHART_MODAL_SCROLLBAR_CSS}
+.bingo-chart-modal-overlay {{
+    position: fixed;
+    inset: 0;
+    z-index: 1;
+    align-items: center;
+    justify-content: center;
+    padding: 1.5rem;
+    box-sizing: border-box;
+}}
+.bingo-chart-modal-backdrop {{
+    position: absolute;
+    inset: 0;
+    border: none;
+    background: rgba(4, 8, 20, 0.72);
+    cursor: pointer;
+}}
+.bingo-chart-modal-panel {{
+    position: relative;
+    z-index: 1;
+    width: min(100%, 960px);
+    max-height: min(80vh, 760px);
+    overflow: auto;
+    background: #10162d;
+    border: 1px solid rgba(234, 234, 234, 0.18);
+    border-radius: 0.85rem;
+    box-shadow: 0 24px 64px rgba(0, 0, 0, 0.45);
+    padding: 1.25rem 1.25rem 1.1rem;
+    box-sizing: border-box;
+}}
+.bingo-chart-modal-close {{
+    position: absolute;
+    top: 0.65rem;
+    right: 0.75rem;
+    border: none;
+    background: transparent;
+    color: rgba(234, 234, 234, 0.72);
+    font-size: 1.65rem;
+    line-height: 1;
+    cursor: pointer;
+    padding: 0.15rem 0.35rem;
+}}
+.bingo-chart-modal-close:hover {{
+    color: #ffffff;
+}}
+.bingo-chart-modal-title {{
+    font-size: 1.35rem;
+    font-weight: 800;
+    color: #f5f5f5;
+    margin: 0 2rem 0.2rem 0;
+    line-height: 1.25;
+}}
+.bingo-chart-modal-table-wrap {{
+    overflow-x: auto;
+}}
+.bingo-chart-modal-table {{
+    width: 100%;
+    border-collapse: collapse;
+    color: #eaeaea;
+}}
+.bingo-chart-modal-table th,
+.bingo-chart-modal-table td {{
+    padding: 0.55rem 0.75rem;
+    border-bottom: 1px solid rgba(234, 234, 234, 0.1);
+    text-align: left;
+    vertical-align: middle;
+}}
+.bingo-chart-modal-table th {{
+    font-size: 0.82rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: rgba(234, 234, 234, 0.62);
+}}
+.bingo-chart-modal-rank {{
+    width: 3rem;
+    color: rgba(234, 234, 234, 0.72);
+    font-variant-numeric: tabular-nums;
+}}
+.bingo-chart-modal-player {{
+    font-weight: 700;
+}}
+.bingo-chart-modal-score {{
+    text-align: right;
+    font-weight: 800;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}}
+.bingo-chart-modal-table tbody tr.bingo-chart-modal-row--highlighted td {{
+    background: rgba(110, 176, 255, 0.12);
+}}
+.bingo-chart-modal-empty {{
+    color: rgba(234, 234, 234, 0.72);
+    font-size: 0.95rem;
+    padding: 0.5rem 0;
+}}
+</style>
+</head>
+<body>
+<div id="bingo-point-counts-modal" class="bingo-chart-modal-overlay bingo-point-counts-modal is-open" aria-hidden="false">
+  <button type="button" class="bingo-chart-modal-backdrop" aria-label="Close point counts"></button>
+  <div class="bingo-chart-modal-panel" role="dialog" aria-modal="true" aria-labelledby="bingo-point-counts-title">
+    <button type="button" class="bingo-chart-modal-close" aria-label="Close">&times;</button>
+    <div id="bingo-point-counts-title" class="bingo-chart-modal-title">Point Counts</div>
+    <div class="bingo-chart-modal-body">{table_html}</div>
+  </div>
+</div>
+<script>
+(function () {{
+  function requestClose() {{
+    try {{
+      const host = window.parent;
+      if (host && typeof host.__bingoClosePointCountsOverlay === "function") {{
+        host.__bingoClosePointCountsOverlay();
+        return;
+      }}
+    }} catch (error) {{}}
+    window.parent.postMessage("bingo-point-counts-close", "*");
+  }}
+  document.querySelector(".bingo-chart-modal-backdrop").addEventListener("click", requestClose);
+  document.querySelector(".bingo-chart-modal-close").addEventListener("click", requestClose);
+  document.addEventListener("keydown", function (event) {{
+    if (event.key === "Escape") {{
+      requestClose();
+    }}
+  }});
+  const toggleRoot = document.querySelector(".bingo-point-counts-toggle");
+  if (toggleRoot) {{
+    const buttons = Array.from(
+      toggleRoot.querySelectorAll("[data-point-counts-view]")
+    );
+    const panels = Array.from(
+      document.querySelectorAll("[data-point-counts-panel]")
+    );
+    buttons.forEach(function (button) {{
+      button.addEventListener("click", function () {{
+        const view = button.getAttribute("data-point-counts-view");
+        buttons.forEach(function (other) {{
+          const active = other === button;
+          other.classList.toggle("is-active", active);
+          other.setAttribute("aria-selected", active ? "true" : "false");
+        }});
+        panels.forEach(function (panel) {{
+          panel.hidden = panel.getAttribute("data-point-counts-panel") !== view;
+        }});
+      }});
+    }});
+  }}
+  document.querySelector(".bingo-chart-modal-close").focus();
+}})();
+</script>
+</body>
+</html>"""
+
+
+def _render_bingo_point_counts(
+    *,
+    charts: list[BingoChart],
+    teams: dict[str, list[BingoTeamPlayer]],
+    settings: BingoSettings,
+    highlight_player_id: str | None = None,
+    leaderboard_by_chart: dict[tuple[str, str], list[BingoChartLeaderboardEntry]]
+    | None = None,
+) -> None:
+    if settings.start_time is None:
+        return
+
+    board_charts = bingo_charts_on_board(charts, int(settings.board_width or 5))
+    if not board_charts:
+        return
+
+    try:
+        if leaderboard_by_chart is None:
+            leaderboard_by_chart = load_all_bingo_chart_player_leaderboards(
+                start_time=settings.start_time,
+            )
+    except Exception as exc:
+        st.error(f"Failed to load point counts: {exc}")
+        return
+
+    points_by_player = _bingo_player_point_totals(
+        board_charts=board_charts,
+        leaderboard_by_chart=leaderboard_by_chart,
+        teams=teams,
+    )
+    table_html = _render_bingo_point_counts_panel_html(
+        teams,
+        points_by_player=points_by_player,
+        highlight_player_id=highlight_player_id,
+    )
+    overlay_doc = _build_bingo_point_counts_overlay_document(table_html=table_html)
+    overlay_doc_json = json.dumps(overlay_doc).replace("</", "<\\/")
+
+    st.markdown(
+        """
+        <style>
+        .st-key-bingo_point_counts_launch {
+            width: 100%;
+            max-width: 100%;
+            margin: 0;
+        }
+        .st-key-bingo_point_counts_launch [data-testid="stElementContainer"] {
+            margin: 0 !important;
+            padding: 0 !important;
+        }
+        .st-key-bingo_point_counts_launch [data-testid="stCustomComponentV1"] {
+            width: 100% !important;
+            max-width: 100% !important;
+            margin: 0 !important;
+            padding: 0 !important;
+        }
+        .st-key-bingo_point_counts_launch iframe {
+            width: 100% !important;
+            max-width: 100% !important;
+            border: none !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+    with st.container(key="bingo_point_counts_launch"):
+        components.html(
+            f"""
+            <button type="button" class="bingo-point-counts-open-btn" id="bingo-point-counts-open">
+              Point Counts
+            </button>
+            <style>
+              html, body {{
+                margin: 0;
+                padding: 0;
+                background: transparent !important;
+                overflow: hidden;
+              }}
+              .bingo-point-counts-open-btn {{
+                display: block;
+                margin: 0 auto;
+                padding: 0.55rem 1.15rem;
+                border-radius: 0.55rem;
+                border: 1px solid rgba(234, 234, 234, 0.22);
+                background: rgba(16, 22, 45, 0.92);
+                color: rgba(245, 245, 245, 0.96);
+                font-family: "Source Sans Pro", "Segoe UI", sans-serif;
+                font-size: 1rem;
+                font-weight: 700;
+                cursor: pointer;
+                line-height: 1.2;
+                white-space: nowrap;
+              }}
+              .bingo-point-counts-open-btn:hover {{
+                background: rgba(24, 32, 58, 0.98);
+                border-color: rgba(234, 234, 234, 0.32);
+              }}
+            </style>
+            <script>
+            (function () {{
+              const parentWin = window.parent;
+              const parentDoc = parentWin.document;
+              const overlayDoc = {overlay_doc_json};
+
+              parentWin.__bingoClosePointCountsOverlay = function () {{
+                const frame = parentDoc.getElementById("bingo-point-counts-overlay-frame");
+                if (frame) {{
+                  frame.style.display = "none";
+                  frame.setAttribute("aria-hidden", "true");
+                }}
+                if (parentWin.__bingoPointCountsIframeObserver) {{
+                  parentWin.__bingoPointCountsIframeObserver.disconnect();
+                  parentWin.__bingoPointCountsIframeObserver = null;
+                }}
+                parentDoc.querySelectorAll("iframe").forEach(function (node) {{
+                  if (node.id === "bingo-point-counts-overlay-frame") {{
+                    return;
+                  }}
+                  if (node.dataset.bingoPointCountsPointerBlocked === "1") {{
+                    node.style.pointerEvents = node.dataset.bingoPointCountsPrevPointerEvents || "";
+                    delete node.dataset.bingoPointCountsPointerBlocked;
+                    delete node.dataset.bingoPointCountsPrevPointerEvents;
+                  }}
+                }});
+                if (parentWin.__bingoPointCountsEscapeListener) {{
+                  parentDoc.removeEventListener(
+                    "keydown",
+                    parentWin.__bingoPointCountsEscapeListener,
+                    true
+                  );
+                  parentWin.__bingoPointCountsEscapeListener = null;
+                }}
+              }};
+
+              parentWin.__bingoBlockPointCountsOverlayInterference = function () {{
+                if (parentWin.__bingoPointCountsOverlayBusy) {{
+                  return;
+                }}
+                parentWin.__bingoPointCountsOverlayBusy = true;
+                try {{
+                  parentDoc.querySelectorAll("iframe").forEach(function (node) {{
+                    if (node.id === "bingo-point-counts-overlay-frame") {{
+                      return;
+                    }}
+                    if (node.dataset.bingoPointCountsPointerBlocked === "1") {{
+                      return;
+                    }}
+                    node.dataset.bingoPointCountsPointerBlocked = "1";
+                    node.dataset.bingoPointCountsPrevPointerEvents = node.style.pointerEvents || "";
+                    node.style.pointerEvents = "none";
+                  }});
+                  const frame = parentDoc.getElementById("bingo-point-counts-overlay-frame");
+                  if (frame && parentDoc.body.lastElementChild !== frame) {{
+                    parentDoc.body.appendChild(frame);
+                  }}
+                  if (frame) {{
+                    frame.style.display = "block";
+                    frame.style.pointerEvents = "auto";
+                    frame.style.zIndex = "2147483647";
+                  }}
+                }} finally {{
+                  parentWin.__bingoPointCountsOverlayBusy = false;
+                }}
+              }};
+
+              parentWin.__bingoOpenPointCountsOverlay = function (nextOverlayDoc) {{
+                const staleModal = parentDoc.getElementById("bingo-point-counts-modal");
+                if (staleModal) {{
+                  staleModal.remove();
+                }}
+                let frame = parentDoc.getElementById("bingo-point-counts-overlay-frame");
+                if (!frame) {{
+                  frame = parentDoc.createElement("iframe");
+                  frame.id = "bingo-point-counts-overlay-frame";
+                  frame.setAttribute("title", "Point Counts");
+                  frame.setAttribute("aria-hidden", "true");
+                  frame.style.cssText =
+                    "position:fixed;inset:0;width:100%;height:100%;border:none;z-index:2147483647;background:transparent;display:none;pointer-events:auto;";
+                }}
+                parentDoc.body.appendChild(frame);
+                frame.srcdoc = nextOverlayDoc;
+                frame.style.display = "block";
+                frame.style.pointerEvents = "auto";
+                frame.setAttribute("aria-hidden", "false");
+                parentWin.__bingoBlockPointCountsOverlayInterference();
+                if (parentWin.__bingoPointCountsIframeObserver) {{
+                  parentWin.__bingoPointCountsIframeObserver.disconnect();
+                }}
+                parentWin.__bingoPointCountsIframeObserver = new MutationObserver(function () {{
+                  parentWin.__bingoBlockPointCountsOverlayInterference();
+                }});
+                parentWin.__bingoPointCountsIframeObserver.observe(parentDoc.body, {{
+                  childList: true,
+                  subtree: true,
+                }});
+                if (parentWin.__bingoPointCountsEscapeListener) {{
+                  parentDoc.removeEventListener(
+                    "keydown",
+                    parentWin.__bingoPointCountsEscapeListener,
+                    true
+                  );
+                }}
+                parentWin.__bingoPointCountsEscapeListener = function (event) {{
+                  if (event.key !== "Escape") {{
+                    return;
+                  }}
+                  const activeFrame = parentDoc.getElementById("bingo-point-counts-overlay-frame");
+                  if (!activeFrame || activeFrame.style.display === "none") {{
+                    return;
+                  }}
+                  parentWin.__bingoClosePointCountsOverlay();
+                }};
+                parentDoc.addEventListener(
+                  "keydown",
+                  parentWin.__bingoPointCountsEscapeListener,
+                  true
+                );
+              }};
+
+              if (parentWin.__bingoPointCountsMessageListener) {{
+                parentWin.removeEventListener("message", parentWin.__bingoPointCountsMessageListener);
+              }}
+              parentWin.__bingoPointCountsMessageListener = function (event) {{
+                if (event.data !== "bingo-point-counts-close") {{
+                  return;
+                }}
+                const frame = parentDoc.getElementById("bingo-point-counts-overlay-frame");
+                if (!frame || frame.style.display === "none") {{
+                  return;
+                }}
+                if (event.source && frame.contentWindow && event.source !== frame.contentWindow) {{
+                  return;
+                }}
+                parentWin.__bingoClosePointCountsOverlay();
+              }};
+              parentWin.addEventListener("message", parentWin.__bingoPointCountsMessageListener);
+
+              const openBtn = document.getElementById("bingo-point-counts-open");
+              if (openBtn) {{
+                openBtn.onclick = function () {{
+                  parentWin.__bingoOpenPointCountsOverlay(overlayDoc);
                 }};
               }}
             }})();
@@ -8800,11 +9542,48 @@ def render_bingo_board() -> None:
         _render_bingo_teams(teams)
         if game_is_live:
             view_player = _resolve_bingo_view_player(teams)
-            _render_bingo_chart_completions(
-                charts=charts,
-                teams=teams,
-                settings=settings,
-                highlight_player_id=(
-                    view_player.player_id if view_player is not None else None
-                ),
+            highlight_player_id = (
+                view_player.player_id if view_player is not None else None
             )
+            try:
+                leaderboard_by_chart = load_all_bingo_chart_player_leaderboards(
+                    start_time=settings.start_time,
+                )
+            except Exception as exc:
+                st.error(f"Failed to load board leaderboards: {exc}")
+                leaderboard_by_chart = None
+            if leaderboard_by_chart is not None:
+                st.markdown(
+                    """
+                    <style>
+                    .st-key-bingo_board_stat_buttons {
+                        width: min(100%, 520px);
+                        max-width: 100%;
+                        margin: 0.35rem auto 0.5rem;
+                    }
+                    .st-key-bingo_board_stat_buttons [data-testid="stHorizontalBlock"] {
+                        gap: 0.75rem;
+                        align-items: center;
+                    }
+                    </style>
+                    """,
+                    unsafe_allow_html=True,
+                )
+                with st.container(key="bingo_board_stat_buttons"):
+                    completions_col, points_col = st.columns(2)
+                    with completions_col:
+                        _render_bingo_chart_completions(
+                            charts=charts,
+                            teams=teams,
+                            settings=settings,
+                            highlight_player_id=highlight_player_id,
+                            leaderboard_by_chart=leaderboard_by_chart,
+                        )
+                    with points_col:
+                        _render_bingo_point_counts(
+                            charts=charts,
+                            teams=teams,
+                            settings=settings,
+                            highlight_player_id=highlight_player_id,
+                            leaderboard_by_chart=leaderboard_by_chart,
+                        )

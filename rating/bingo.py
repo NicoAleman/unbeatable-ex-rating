@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -18,7 +19,7 @@ from rating.bingo_chart_scoring import (
     compute_chart_claim_scoring,
 )
 from rating.formatting import format_song_display_name
-from rating.supabase_postgres import postgres_connection as _connect
+from rating.supabase_config import get_supabase_db_url
 
 TEAM_ORDER = ("Eve", "Grace", "Rest")
 TEAM_COLORS = {
@@ -29,7 +30,6 @@ TEAM_COLORS = {
 
 # Short-lived process cache so scoreboard + board fragments don't re-hit Postgres
 # for the same window on one page load. Completed day windows use a longer TTL.
-# DB connections: shared pool + transaction-mode pooler rewrite in rating.supabase_postgres.
 _QUERY_CACHE_LOCK = threading.Lock()
 _QUERY_CACHE: dict[str, tuple[float, Any]] = {}
 _LIVE_QUERY_CACHE_TTL_SECONDS = 20.0
@@ -163,12 +163,7 @@ def _bingo_leaderboard_entry_from_row(row) -> BingoChartLeaderboardEntry:
 
 @dataclass(frozen=True)
 class BingoSquareClaimEvent:
-    """A square's leading team changing because of a submitted score.
-
-    ``team`` is the new leading (receiving) team. ``player_team`` is the team of
-    the player whose score caused the change — these differ when a v2 placement
-    reshuffle hands the square to another team.
-    """
+    """A team taking a square that was empty or held by another team."""
 
     song: str
     difficulty: str
@@ -180,7 +175,6 @@ class BingoSquareClaimEvent:
     prev_team: str | None
     player_id: str
     player_display_name: str
-    player_team: str
     score: int
     created_at: datetime
     formed_bingo: bool = False
@@ -193,10 +187,15 @@ class BingoSquareClaimEvent:
     def is_flip(self) -> bool:
         return self.prev_team is not None
 
-    @property
-    def is_cross_team_flip(self) -> bool:
-        """True when the scorer's team is not the team that received the square."""
-        return self.is_flip and self.player_team != self.team
+
+def _connect(db_url: str | None = None):
+    url = db_url or get_supabase_db_url()
+    if not url:
+        raise RuntimeError(
+            "Supabase is not configured. Set supabase.db_url in .streamlit/secrets.toml "
+            "or SUPABASE_DB_URL in the environment."
+        )
+    return psycopg2.connect(url)
 
 
 def load_bingo_settings(db_url: str | None = None) -> BingoSettings | None:
@@ -267,11 +266,6 @@ def load_bingo_teams_by_ex_rating(
     """Load bingo roster grouped by team, each ordered by EX Rating desc."""
     from rating.public_leaderboard import load_ex_leaderboard
 
-    cache_key = f"teams|{db_url or ''}"
-    cached = _cache_get(cache_key)
-    if cached is not None:
-        return cached
-
     try:
         with _connect(db_url) as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
@@ -307,7 +301,6 @@ def load_bingo_teams_by_ex_rating(
         players.sort(
             key=lambda player: (-player.ex_rating, player.display_name.casefold())
         )
-    _cache_put(cache_key, grouped, ttl_seconds=_LIVE_QUERY_CACHE_TTL_SECONDS)
     return grouped
 
 
@@ -344,17 +337,12 @@ def load_bingo_chart_standings_data(
     start_time: datetime | None,
     end_time: datetime | None = None,
     db_url: str | None = None,
-    conn=None,
-    roster: dict[str, list[BingoTeamPlayer]] | None = None,
 ) -> dict[tuple[str, str], tuple[dict[str, int], dict[str, list[int]]]]:
     """Return {(song, difficulty): (team_totals, player_bests_by_team)}.
 
     player_bests_by_team maps team -> list of each player's best score (unsorted).
     Scores are filtered to created_at >= start_time, and if end_time is set,
     created_at < end_time (cumulative through that instant).
-
-    Optional ``conn`` / ``roster`` let callers (scoreboard) reuse one DB session
-    and avoid a teams round-trip per day window.
     """
     if start_time is None:
         return {}
@@ -366,46 +354,40 @@ def load_bingo_chart_standings_data(
     if cached is not None:
         return cached
 
-    def _fetch_rows(active_conn: Any) -> list[Any]:
-        with active_conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
-            if end_time is None:
-                cur.execute(
-                    """
-                    SELECT
-                        player_id,
-                        team,
-                        song,
-                        difficulty,
-                        MAX(score)::BIGINT AS best_score
-                    FROM bingo_scores
-                    WHERE created_at >= %s
-                    GROUP BY player_id, team, song, difficulty
-                    """,
-                    (start_time,),
-                )
-            else:
-                cur.execute(
-                    """
-                    SELECT
-                        player_id,
-                        team,
-                        song,
-                        difficulty,
-                        MAX(score)::BIGINT AS best_score
-                    FROM bingo_scores
-                    WHERE created_at >= %s AND created_at < %s
-                    GROUP BY player_id, team, song, difficulty
-                    """,
-                    (start_time, end_time),
-                )
-            return cur.fetchall()
-
     try:
-        if conn is None:
-            with _connect(db_url) as owned_conn:
-                rows = _fetch_rows(owned_conn)
-        else:
-            rows = _fetch_rows(conn)
+        with _connect(db_url) as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+                if end_time is None:
+                    cur.execute(
+                        """
+                        SELECT
+                            player_id,
+                            team,
+                            song,
+                            difficulty,
+                            MAX(score)::BIGINT AS best_score
+                        FROM bingo_scores
+                        WHERE created_at >= %s
+                        GROUP BY player_id, team, song, difficulty
+                        """,
+                        (start_time,),
+                    )
+                else:
+                    cur.execute(
+                        """
+                        SELECT
+                            player_id,
+                            team,
+                            song,
+                            difficulty,
+                            MAX(score)::BIGINT AS best_score
+                        FROM bingo_scores
+                        WHERE created_at >= %s AND created_at < %s
+                        GROUP BY player_id, team, song, difficulty
+                        """,
+                        (start_time, end_time),
+                    )
+                rows = cur.fetchall()
     except psycopg2.errors.UndefinedTable:
         return {}
 
@@ -417,7 +399,8 @@ def load_bingo_chart_standings_data(
         score = int(row["best_score"])
         players_by_chart.setdefault(key, {})[player_id] = (team, score)
 
-    if roster is None and bingo_scoring_version() == "v2":
+    roster: dict[str, list[BingoTeamPlayer]] | None = None
+    if bingo_scoring_version() == "v2":
         roster = load_bingo_teams_by_ex_rating(db_url)
 
     result: dict[tuple[str, str], tuple[dict[str, int], dict[str, list[int]]]] = {}
@@ -821,10 +804,8 @@ def load_bingo_square_claim_feed(
     """Replay bingo_scores chronologically and emit square claim / flip events.
 
     An event is recorded when a score causes a square's leading team to change
-    from uncontested → a team, or from one team → another — including v2 cases
-    where the scoring player's team is not the new leader (placement reshuffle).
-    Events also note when that claim newly forms a bingo, 4-in-a-row, or group
-    capture for the receiving team.
+    from uncontested → a team, or from one team → another. Events also note
+    when that claim newly forms a bingo, 4-in-a-row, or group capture.
     """
     if start_time is None or limit <= 0:
         return []
@@ -919,9 +900,15 @@ def load_bingo_square_claim_feed(
         if previous is not None and score <= previous[1]:
             continue
 
-        # Snapshot board state before this score lands.
+        # Snapshot achievements before this score lands.
         prev_coord_leaders = _leaders_by_coord_from_charts(board_charts, leaders)
         prev_runs = find_bingo_runs(prev_coord_leaders, rows=rows, cols=cols)
+        prev_bingos, prev_fours = _run_keys_for_cell(
+            prev_runs,
+            row=chart.row,
+            column=chart.column,
+            team=team,
+        )
         prev_totals, prev_best_lists = _standings_maps_from_player_bests(
             bests_by_chart, roster=roster
         )
@@ -942,21 +929,17 @@ def load_bingo_square_claim_feed(
 
         if new_leader is None or new_leader == prev_leader:
             continue
+        # Only count when the scoring team becomes the new leader.
+        if new_leader != team:
+            continue
 
-        # Achievements / badges belong to the team that received the square.
-        prev_bingos, prev_fours = _run_keys_for_cell(
-            prev_runs,
-            row=chart.row,
-            column=chart.column,
-            team=new_leader,
-        )
         new_coord_leaders = _leaders_by_coord_from_charts(board_charts, leaders)
         new_runs = find_bingo_runs(new_coord_leaders, rows=rows, cols=cols)
         new_bingos, new_fours = _run_keys_for_cell(
             new_runs,
             row=chart.row,
             column=chart.column,
-            team=new_leader,
+            team=team,
         )
         new_totals, new_best_lists = _standings_maps_from_player_bests(
             bests_by_chart, roster=roster
@@ -998,15 +981,14 @@ def load_bingo_square_claim_feed(
                 prev_team=prev_leader,
                 player_id=player_id,
                 player_display_name=str(row["display_name"]),
-                player_team=team,
                 score=score,
                 created_at=created_at,
                 formed_bingo=bool(new_bingos - prev_bingos),
                 formed_four=bool(new_fours - prev_fours),
                 captured_group=(
                     chart.group is not None
-                    and new_group_owner == new_leader
-                    and prev_group_owner != new_leader
+                    and new_group_owner == team
+                    and prev_group_owner != team
                 ),
                 point_impacts=point_impacts,
             )
@@ -1893,55 +1875,29 @@ def compute_bingo_scoreboard(
     }
     totals = {team: 0 for team in TEAM_ORDER}
 
-    # One shared connection + one roster load for all day windows.
-    # Avoids opening a new session (and a teams query) per day.
-    roster: dict[str, list[BingoTeamPlayer]] | None = None
-    if bingo_scoring_version() == "v2":
-        roster = load_bingo_teams_by_ex_rating(db_url)
+    # Fetch closed-day + live standings in parallel (each is a separate Postgres round-trip).
+    standings_jobs: list[tuple[str, int | None, datetime | None]] = [
+        (f"day:{day}", day, bingo_day_end(settings.start_time, day))
+        for day in range(1, finished + 1)
+    ]
+    needs_live = in_progress is not None
+    if needs_live:
+        standings_jobs.append(("live", None, None))
 
     standings_by_job: dict[str, dict] = {}
-    pending_days: list[int] = []
-    for day in range(1, finished + 1):
-        end_time = bingo_day_end(settings.start_time, day)
-        cache_key = (
-            f"standings|{_dt_cache_token(settings.start_time)}|"
-            f"{_dt_cache_token(end_time)}|{db_url or ''}"
-        )
-        cached = _cache_get(cache_key)
-        if cached is not None:
-            standings_by_job[f"day:{day}"] = cached
-        else:
-            pending_days.append(day)
+    if standings_jobs:
+        def _load_job(job: tuple[str, int | None, datetime | None]):
+            job_key, _day, end_time = job
+            return job_key, load_bingo_chart_standings_data(
+                start_time=settings.start_time,
+                end_time=end_time,
+                db_url=db_url,
+            )
 
-    need_live = False
-    if in_progress is not None:
-        live_key = (
-            f"standings|{_dt_cache_token(settings.start_time)}||{db_url or ''}"
-        )
-        cached_live = _cache_get(live_key)
-        if cached_live is not None:
-            standings_by_job["live"] = cached_live
-        else:
-            need_live = True
-
-    if pending_days or need_live:
-        with _connect(db_url) as conn:
-            for day in pending_days:
-                standings_by_job[f"day:{day}"] = load_bingo_chart_standings_data(
-                    start_time=settings.start_time,
-                    end_time=bingo_day_end(settings.start_time, day),
-                    db_url=db_url,
-                    conn=conn,
-                    roster=roster,
-                )
-            if need_live:
-                standings_by_job["live"] = load_bingo_chart_standings_data(
-                    start_time=settings.start_time,
-                    end_time=None,
-                    db_url=db_url,
-                    conn=conn,
-                    roster=roster,
-                )
+        workers = max(1, min(8, len(standings_jobs)))
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            for job_key, standings in pool.map(_load_job, standings_jobs):
+                standings_by_job[job_key] = standings
 
     for day in range(1, finished + 1):
         standings = standings_by_job.get(f"day:{day}", {})
