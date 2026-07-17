@@ -18,19 +18,10 @@ from rating.imported_players import (
     build_ratings_from_stored_scores,
     stored_scores_have_accuracy,
 )
-from rating.supabase_config import get_supabase_db_url, supabase_configured
+from rating.supabase_config import supabase_configured
+from rating.supabase_postgres import acquire_postgres_connection as _connect_postgres
 
 BATCH_SIZE = 2000
-
-
-def _connect_postgres(db_url: str | None = None):
-    url = db_url or get_supabase_db_url()
-    if not url:
-        raise RuntimeError(
-            "Supabase is not configured. Set supabase.db_url in .streamlit/secrets.toml "
-            "or SUPABASE_DB_URL in the environment."
-        )
-    return psycopg2.connect(url)
 
 
 def _format_timestamp(value: object) -> str:
