@@ -5526,15 +5526,15 @@ def _render_bingo_chart_completions(
         )
 
 
-def _bingo_player_point_totals(
+def _bingo_player_chart_raw_points(
     *,
     board_charts: list[BingoChart],
     leaderboard_by_chart: dict[tuple[str, str], list[BingoChartLeaderboardEntry]],
     teams: dict[str, list[BingoTeamPlayer]],
-) -> dict[str, float]:
-    """Return {player_id: total claim points} summed across all board squares."""
-    totals: dict[str, float] = {
-        player.player_id: 0.0 for player in _flatten_bingo_players(teams)
+) -> dict[str, list[float]]:
+    """Return {player_id: [raw claim points per board chart]}."""
+    points_by_player: dict[str, list[float]] = {
+        player.player_id: [] for player in _flatten_bingo_players(teams)
     }
     use_v2 = bingo_scoring_version() == "v2"
     for chart in board_charts:
@@ -5545,26 +5545,110 @@ def _bingo_player_point_totals(
         players = {
             entry.player_id: (entry.team, int(entry.score)) for entry in entries
         }
-        if not players:
-            continue
-        if use_v2:
-            breakdowns = compute_chart_player_point_breakdowns(
-                song=chart.song,
-                difficulty=chart.difficulty,
-                players=players,
-            )
-            for player_id, breakdown in breakdowns.items():
-                if player_id not in totals:
-                    continue
-                totals[player_id] += float(breakdown.accuracy_points) + float(
-                    breakdown.placement_bonus
+        chart_points: dict[str, float] = {
+            player_id: 0.0 for player_id in points_by_player
+        }
+        if players:
+            if use_v2:
+                breakdowns = compute_chart_player_point_breakdowns(
+                    song=chart.song,
+                    difficulty=chart.difficulty,
+                    players=players,
                 )
-        else:
-            for player_id, (_team, score) in players.items():
-                if player_id not in totals:
-                    continue
-                totals[player_id] += float(int(score))
-    return totals
+                for player_id, breakdown in breakdowns.items():
+                    if player_id not in chart_points:
+                        continue
+                    chart_points[player_id] = float(breakdown.accuracy_points) + float(
+                        breakdown.placement_bonus
+                    )
+            else:
+                for player_id, (_team, score) in players.items():
+                    if player_id not in chart_points:
+                        continue
+                    chart_points[player_id] = float(int(score))
+        for player_id, points in chart_points.items():
+            points_by_player[player_id].append(points)
+    return points_by_player
+
+
+def _bingo_player_point_totals(
+    *,
+    board_charts: list[BingoChart],
+    leaderboard_by_chart: dict[tuple[str, str], list[BingoChartLeaderboardEntry]],
+    teams: dict[str, list[BingoTeamPlayer]],
+) -> dict[str, float]:
+    """Return {player_id: total claim points} summed across all board squares."""
+    by_chart = _bingo_player_chart_raw_points(
+        board_charts=board_charts,
+        leaderboard_by_chart=leaderboard_by_chart,
+        teams=teams,
+    )
+    return {
+        player_id: float(sum(points)) for player_id, points in by_chart.items()
+    }
+
+
+BINGO_POINT_COUNTS_SCALED_FIRST_PLACE = 200.0
+BINGO_POINT_COUNTS_TOP_CHARTS = 15
+
+
+def _bingo_top15_scaled_totals_from_chart_points(
+    by_chart: dict[str, list[float]],
+    *,
+    top_n: int = BINGO_POINT_COUNTS_TOP_CHARTS,
+    first_place_scaled: float = BINGO_POINT_COUNTS_SCALED_FIRST_PLACE,
+) -> dict[str, float]:
+    """Scale each chart to first=200, then sum each player's best ``top_n`` charts."""
+    if not by_chart:
+        return {}
+    chart_count = max((len(points) for points in by_chart.values()), default=0)
+    scaled_by_player: dict[str, list[float]] = {
+        player_id: [0.0] * chart_count for player_id in by_chart
+    }
+
+    for chart_index in range(chart_count):
+        raw_on_chart = {
+            player_id: float(points[chart_index]) if chart_index < len(points) else 0.0
+            for player_id, points in by_chart.items()
+        }
+        first_raw = max(raw_on_chart.values()) if raw_on_chart else 0.0
+        if first_raw <= 0.0:
+            continue
+        scale = float(first_place_scaled) / first_raw
+        for player_id, raw_points in raw_on_chart.items():
+            scaled_by_player[player_id][chart_index] = float(raw_points) * scale
+
+    keep = max(0, int(top_n))
+    return {
+        player_id: float(sum(sorted(scaled_values, reverse=True)[:keep]))
+        for player_id, scaled_values in scaled_by_player.items()
+    }
+
+
+def _bingo_player_top15_scaled_point_totals(
+    *,
+    board_charts: list[BingoChart],
+    leaderboard_by_chart: dict[tuple[str, str], list[BingoChartLeaderboardEntry]],
+    teams: dict[str, list[BingoTeamPlayer]],
+    top_n: int = BINGO_POINT_COUNTS_TOP_CHARTS,
+    first_place_scaled: float = BINGO_POINT_COUNTS_SCALED_FIRST_PLACE,
+) -> dict[str, float]:
+    """Top-N scaled chart contributions per player.
+
+    On each chart, 1st place (highest raw claim points) is worth ``first_place_scaled``
+    (default 200). Everyone else is scaled by their share of 1st's raw points.
+    Each player's total is the sum of their best ``top_n`` scaled chart values.
+    """
+    by_chart = _bingo_player_chart_raw_points(
+        board_charts=board_charts,
+        leaderboard_by_chart=leaderboard_by_chart,
+        teams=teams,
+    )
+    return _bingo_top15_scaled_totals_from_chart_points(
+        by_chart,
+        top_n=top_n,
+        first_place_scaled=first_place_scaled,
+    )
 
 
 def _bingo_competition_ranks_by_points(
@@ -5644,10 +5728,24 @@ def _bingo_point_counts_shared_table_css() -> str:
         "}"
         ".bingo-point-counts-toggle {"
         "display: flex;"
+        "flex-wrap: wrap;"
         "justify-content: center;"
         "gap: 0.45rem;"
-        "margin: 0.15rem 0 0.85rem;"
+        "margin: 0.15rem 0 0.55rem;"
         "}"
+        ".bingo-point-counts-toggle + .bingo-point-counts-toggle {"
+        "margin-top: 0;"
+        "margin-bottom: 0.75rem;"
+        "}"
+        ".bingo-point-counts-mode-note {"
+        "display: none;"
+        "text-align: center;"
+        "color: rgba(234, 234, 234, 0.62);"
+        "font-size: 0.82rem;"
+        "line-height: 1.35;"
+        "margin: -0.35rem 0 0.85rem;"
+        "}"
+        ".bingo-point-counts-mode-note.is-visible { display: block; }"
         ".bingo-point-counts-toggle-btn {"
         "border: 1px solid rgba(234, 234, 234, 0.22);"
         "background: rgba(8, 12, 28, 0.72);"
@@ -5664,6 +5762,7 @@ def _bingo_point_counts_shared_table_css() -> str:
         "border-color: rgba(110, 176, 255, 0.46);"
         "color: #f5f5f5;"
         "}"
+        ".bingo-point-counts-dataset[hidden] { display: none !important; }"
         ".bingo-point-counts-view[hidden] { display: none !important; }"
         "@media (max-width: 820px) {"
         ".bingo-point-counts-teams { grid-template-columns: 1fr; }"
@@ -5813,36 +5912,71 @@ def _render_bingo_point_counts_panel_html(
     teams: dict[str, list[BingoTeamPlayer]],
     *,
     points_by_player: dict[str, float],
+    top15_points_by_player: dict[str, float],
     highlight_player_id: str | None = None,
 ) -> str:
-    overall_html = _render_bingo_point_counts_overall_table_html(
-        teams,
-        points_by_player=points_by_player,
-        highlight_player_id=highlight_player_id,
-    )
-    teams_html = _render_bingo_point_counts_teams_table_html(
-        teams,
-        points_by_player=points_by_player,
-        highlight_player_id=highlight_player_id,
-    )
+    datasets: list[tuple[str, dict[str, float]]] = [
+        ("all", points_by_player),
+        ("top15", top15_points_by_player),
+    ]
+    dataset_html: list[str] = []
+    for mode, mode_points in datasets:
+        overall_html = _render_bingo_point_counts_overall_table_html(
+            teams,
+            points_by_player=mode_points,
+            highlight_player_id=highlight_player_id,
+        )
+        teams_html = _render_bingo_point_counts_teams_table_html(
+            teams,
+            points_by_player=mode_points,
+            highlight_player_id=highlight_player_id,
+        )
+        hidden_attr = "" if mode == "all" else " hidden"
+        dataset_html.append(
+            f'<div class="bingo-point-counts-dataset" data-point-counts-mode="{mode}"'
+            f"{hidden_attr}>"
+            '<div class="bingo-point-counts-view" data-point-counts-panel="overall">'
+            f"{overall_html}"
+            "</div>"
+            '<div class="bingo-point-counts-view" data-point-counts-panel="teams" hidden>'
+            f"{teams_html}"
+            "</div>"
+            "</div>"
+        )
+
+    top_n = int(BINGO_POINT_COUNTS_TOP_CHARTS)
+    first_scaled = int(BINGO_POINT_COUNTS_SCALED_FIRST_PLACE)
     return (
         f"<style>{_bingo_point_counts_shared_table_css()}</style>"
-        '<div class="bingo-point-counts-toggle" role="tablist" aria-label="Point counts view">'
+        '<div class="bingo-point-counts-toggle" role="tablist" '
+        'aria-label="Point counts view">'
         '<button type="button" class="bingo-point-counts-toggle-btn is-active" '
         'data-point-counts-view="overall" role="tab" aria-selected="true">Overall</button>'
         '<button type="button" class="bingo-point-counts-toggle-btn" '
         'data-point-counts-view="teams" role="tab" aria-selected="false">By Team</button>'
         "</div>"
-        '<div class="bingo-point-counts-view" data-point-counts-panel="overall">'
-        f"{overall_html}"
+        '<div class="bingo-point-counts-toggle" role="tablist" '
+        'aria-label="Point counts scoring mode">'
+        '<button type="button" class="bingo-point-counts-toggle-btn is-active" '
+        'data-point-counts-mode="all" role="tab" aria-selected="true">All Charts</button>'
+        '<button type="button" class="bingo-point-counts-toggle-btn" '
+        'data-point-counts-mode="top15" role="tab" aria-selected="false">'
+        f"Top {top_n} Scaled</button>"
         "</div>"
-        '<div class="bingo-point-counts-view" data-point-counts-panel="teams" hidden>'
-        f"{teams_html}"
+        '<div class="bingo-point-counts-mode-note" data-point-counts-mode-note="top15">'
+        f"Each chart scales 1st place to {first_scaled} pts; others get the same share of "
+        f"1st's raw points. Totals use each player's best {top_n} scaled charts."
         "</div>"
+        f"{''.join(dataset_html)}"
     )
 
 
-def _build_bingo_point_counts_overlay_document(*, table_html: str) -> str:
+def _build_bingo_point_counts_overlay_document(
+    *,
+    table_html: str,
+    snapshot_label: str = "Live board",
+) -> str:
+    snapshot = html.escape(snapshot_label)
     return f"""<!DOCTYPE html>
 <html>
 <head>
@@ -5905,8 +6039,14 @@ html, body {{
     font-size: 1.35rem;
     font-weight: 800;
     color: #f5f5f5;
-    margin: 0 2rem 0.2rem 0;
+    margin: 0 2rem 0.15rem 0;
     line-height: 1.25;
+}}
+.bingo-chart-modal-subtitle {{
+    font-size: 0.92rem;
+    font-weight: 600;
+    color: rgba(234, 234, 234, 0.62);
+    margin: 0 2rem 0.35rem 0;
 }}
 .bingo-chart-modal-table-wrap {{
     overflow-x: auto;
@@ -5960,6 +6100,7 @@ html, body {{
   <div class="bingo-chart-modal-panel" role="dialog" aria-modal="true" aria-labelledby="bingo-point-counts-title">
     <button type="button" class="bingo-chart-modal-close" aria-label="Close">&times;</button>
     <div id="bingo-point-counts-title" class="bingo-chart-modal-title">Point Counts</div>
+    <div class="bingo-chart-modal-subtitle">{snapshot}</div>
     <div class="bingo-chart-modal-body">{table_html}</div>
   </div>
 </div>
@@ -5982,28 +6123,61 @@ html, body {{
       requestClose();
     }}
   }});
-  const toggleRoot = document.querySelector(".bingo-point-counts-toggle");
-  if (toggleRoot) {{
-    const buttons = Array.from(
-      toggleRoot.querySelectorAll("[data-point-counts-view]")
-    );
-    const panels = Array.from(
-      document.querySelectorAll("[data-point-counts-panel]")
-    );
-    buttons.forEach(function (button) {{
-      button.addEventListener("click", function () {{
-        const view = button.getAttribute("data-point-counts-view");
-        buttons.forEach(function (other) {{
-          const active = other === button;
-          other.classList.toggle("is-active", active);
-          other.setAttribute("aria-selected", active ? "true" : "false");
-        }});
-        panels.forEach(function (panel) {{
-          panel.hidden = panel.getAttribute("data-point-counts-panel") !== view;
-        }});
+  const viewButtons = Array.from(
+    document.querySelectorAll(".bingo-point-counts-toggle [data-point-counts-view]")
+  );
+  const modeButtons = Array.from(
+    document.querySelectorAll(".bingo-point-counts-toggle [data-point-counts-mode]")
+  );
+  const datasets = Array.from(
+    document.querySelectorAll(".bingo-point-counts-dataset")
+  );
+  const modeNotes = Array.from(
+    document.querySelectorAll("[data-point-counts-mode-note]")
+  );
+  let activeView = "overall";
+  let activeMode = "all";
+
+  function syncPointCountsPanels() {{
+    datasets.forEach(function (dataset) {{
+      const modeMatch = dataset.getAttribute("data-point-counts-mode") === activeMode;
+      dataset.hidden = !modeMatch;
+      if (!modeMatch) {{
+        return;
+      }}
+      dataset.querySelectorAll("[data-point-counts-panel]").forEach(function (panel) {{
+        panel.hidden = panel.getAttribute("data-point-counts-panel") !== activeView;
       }});
     }});
+    modeNotes.forEach(function (note) {{
+      const show = note.getAttribute("data-point-counts-mode-note") === activeMode;
+      note.classList.toggle("is-visible", show);
+    }});
   }}
+
+  viewButtons.forEach(function (button) {{
+    button.addEventListener("click", function () {{
+      activeView = button.getAttribute("data-point-counts-view") || "overall";
+      viewButtons.forEach(function (other) {{
+        const active = other === button;
+        other.classList.toggle("is-active", active);
+        other.setAttribute("aria-selected", active ? "true" : "false");
+      }});
+      syncPointCountsPanels();
+    }});
+  }});
+  modeButtons.forEach(function (button) {{
+    button.addEventListener("click", function () {{
+      activeMode = button.getAttribute("data-point-counts-mode") || "all";
+      modeButtons.forEach(function (other) {{
+        const active = other === button;
+        other.classList.toggle("is-active", active);
+        other.setAttribute("aria-selected", active ? "true" : "false");
+      }});
+      syncPointCountsPanels();
+    }});
+  }});
+  syncPointCountsPanels();
   document.querySelector(".bingo-chart-modal-close").focus();
 }})();
 </script>
@@ -6019,6 +6193,8 @@ def _render_bingo_point_counts(
     highlight_player_id: str | None = None,
     leaderboard_by_chart: dict[tuple[str, str], list[BingoChartLeaderboardEntry]]
     | None = None,
+    end_time: datetime | None = None,
+    view_day: int | None = None,
 ) -> None:
     if settings.start_time is None:
         return
@@ -6031,22 +6207,36 @@ def _render_bingo_point_counts(
         if leaderboard_by_chart is None:
             leaderboard_by_chart = load_all_bingo_chart_player_leaderboards(
                 start_time=settings.start_time,
+                end_time=end_time,
             )
     except Exception as exc:
         st.error(f"Failed to load point counts: {exc}")
         return
 
-    points_by_player = _bingo_player_point_totals(
+    by_chart = _bingo_player_chart_raw_points(
         board_charts=board_charts,
         leaderboard_by_chart=leaderboard_by_chart,
         teams=teams,
     )
+    points_by_player = {
+        player_id: float(sum(points)) for player_id, points in by_chart.items()
+    }
+    top15_points_by_player = _bingo_top15_scaled_totals_from_chart_points(by_chart)
+    day_count = max(1, int(settings.day_count or 1))
+    snapshot_label = _bingo_board_snapshot_label(
+        view_day=view_day,
+        day_count=day_count,
+    )
     table_html = _render_bingo_point_counts_panel_html(
         teams,
         points_by_player=points_by_player,
+        top15_points_by_player=top15_points_by_player,
         highlight_player_id=highlight_player_id,
     )
-    overlay_doc = _build_bingo_point_counts_overlay_document(table_html=table_html)
+    overlay_doc = _build_bingo_point_counts_overlay_document(
+        table_html=table_html,
+        snapshot_label=snapshot_label,
+    )
     overlay_doc_json = json.dumps(overlay_doc).replace("</", "<\\/")
 
     st.markdown(
@@ -9218,8 +9408,13 @@ def _render_bingo_board_fragment(
     settings: BingoSettings,
     charts: list,
     completed_days: int,
+    scoreboard: BingoScoreboard | None = None,
 ) -> None:
-    """Board body + day selector. Reruns alone when the day view changes."""
+    """Board body + day selector + day-scoped footer menus.
+
+    Reruns alone when the day view changes so Point Counts / Completions update
+    without a full app rerun, while staying below the team names.
+    """
     _maybe_rerun_bingo_app()
 
     day_count = max(1, int(settings.day_count or 1))
@@ -9357,6 +9552,70 @@ def _render_bingo_board_fragment(
             day_count=day_count,
         )
     _inject_scoreboard_day_highlight(highlight_day, day_count=day_count)
+
+    # Remainder of the page stays in this fragment so day switches rebuild
+    # Point Counts / Completions while keeping them below the team names.
+    if scoreboard is not None:
+        _render_bingo_scoreboard(
+            scoreboard,
+            live_view=view_day is None,
+        )
+    _render_bingo_activity_feed(settings=settings)
+    game_is_live = (
+        bingo_in_progress_day(
+            start_time=settings.start_time,
+            day_count=settings.day_count,
+        )
+        is not None
+    )
+    if game_is_live or BINGO_MANUAL_SUBMISSION_FORCE_VISIBLE:
+        _render_bingo_manual_submission(
+            charts=charts,
+            teams=teams,
+            settings=settings,
+        )
+    _render_bingo_teams(teams)
+    if game_is_live and leaderboard_by_chart is not None:
+        view_player = _resolve_bingo_view_player(teams)
+        highlight_player_id = (
+            view_player.player_id if view_player is not None else None
+        )
+        st.markdown(
+            """
+            <style>
+            .st-key-bingo_board_stat_buttons {
+                width: min(100%, 520px);
+                max-width: 100%;
+                margin: 0.35rem auto 0.5rem;
+            }
+            .st-key-bingo_board_stat_buttons [data-testid="stHorizontalBlock"] {
+                gap: 0.75rem;
+                align-items: center;
+            }
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
+        with st.container(key="bingo_board_stat_buttons"):
+            completions_col, points_col = st.columns(2)
+            with completions_col:
+                _render_bingo_chart_completions(
+                    charts=charts,
+                    teams=teams,
+                    settings=settings,
+                    highlight_player_id=highlight_player_id,
+                    leaderboard_by_chart=leaderboard_by_chart,
+                )
+            with points_col:
+                _render_bingo_point_counts(
+                    charts=charts,
+                    teams=teams,
+                    settings=settings,
+                    highlight_player_id=highlight_player_id,
+                    leaderboard_by_chart=leaderboard_by_chart,
+                    end_time=end_time,
+                    view_day=view_day,
+                )
 
 
 def _commit_pending_bingo_submission() -> None:
@@ -9514,76 +9773,10 @@ def render_bingo_board() -> None:
                 settings=settings,
                 charts=charts,
                 completed_days=completed_days,
+                scoreboard=scoreboard,
             )
             _render_bingo_chart_refresh_bridge(
                 settings=settings,
                 charts=charts,
                 completed_days=completed_days,
             )
-        if scoreboard is not None:
-            _render_bingo_scoreboard(
-                scoreboard,
-                live_view=st.session_state.get("bingo_view_day") is None,
-            )
-        _render_bingo_activity_feed(settings=settings)
-        game_is_live = (
-            bingo_in_progress_day(
-                start_time=settings.start_time,
-                day_count=settings.day_count,
-            )
-            is not None
-        )
-        if game_is_live or BINGO_MANUAL_SUBMISSION_FORCE_VISIBLE:
-            _render_bingo_manual_submission(
-                charts=charts,
-                teams=teams,
-                settings=settings,
-            )
-        _render_bingo_teams(teams)
-        if game_is_live:
-            view_player = _resolve_bingo_view_player(teams)
-            highlight_player_id = (
-                view_player.player_id if view_player is not None else None
-            )
-            try:
-                leaderboard_by_chart = load_all_bingo_chart_player_leaderboards(
-                    start_time=settings.start_time,
-                )
-            except Exception as exc:
-                st.error(f"Failed to load board leaderboards: {exc}")
-                leaderboard_by_chart = None
-            if leaderboard_by_chart is not None:
-                st.markdown(
-                    """
-                    <style>
-                    .st-key-bingo_board_stat_buttons {
-                        width: min(100%, 520px);
-                        max-width: 100%;
-                        margin: 0.35rem auto 0.5rem;
-                    }
-                    .st-key-bingo_board_stat_buttons [data-testid="stHorizontalBlock"] {
-                        gap: 0.75rem;
-                        align-items: center;
-                    }
-                    </style>
-                    """,
-                    unsafe_allow_html=True,
-                )
-                with st.container(key="bingo_board_stat_buttons"):
-                    completions_col, points_col = st.columns(2)
-                    with completions_col:
-                        _render_bingo_chart_completions(
-                            charts=charts,
-                            teams=teams,
-                            settings=settings,
-                            highlight_player_id=highlight_player_id,
-                            leaderboard_by_chart=leaderboard_by_chart,
-                        )
-                    with points_col:
-                        _render_bingo_point_counts(
-                            charts=charts,
-                            teams=teams,
-                            settings=settings,
-                            highlight_player_id=highlight_player_id,
-                            leaderboard_by_chart=leaderboard_by_chart,
-                        )
