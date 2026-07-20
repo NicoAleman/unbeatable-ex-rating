@@ -9695,6 +9695,7 @@ def render_bingo_board() -> None:
             return
 
         game_is_active = _bingo_game_is_active(settings=settings)
+        game_has_ended = _bingo_game_has_ended(settings=settings)
         if live_view and game_is_active and "bingo_last_updated" not in st.session_state:
             _touch_bingo_live_updated()
 
@@ -9702,17 +9703,19 @@ def render_bingo_board() -> None:
             _render_bingo_auto_refresh_trigger()
 
         # Paint the header before the heavy scoreboard/board queries so the page
-        # doesn't sit blank while Postgres is busy.
-        _render_bingo_header(
-            settings,
-            live_view=live_view and _bingo_supports_live_refresh(settings=settings),
-            updated_ms=(
-                int(float(st.session_state.bingo_last_updated) * 1000)
-                if live_view and game_is_active
-                else None
-            ),
-            final_standings=None,
-        )
+        # doesn't sit blank while Postgres is busy. After the game ends, wait until
+        # we have standings so we only mount bingo_page_header once.
+        if not game_has_ended:
+            _render_bingo_header(
+                settings,
+                live_view=live_view and _bingo_supports_live_refresh(settings=settings),
+                updated_ms=(
+                    int(float(st.session_state.bingo_last_updated) * 1000)
+                    if live_view and game_is_active
+                    else None
+                ),
+                final_standings=None,
+            )
 
         if not charts:
             st.warning("No Bingo charts are configured yet.")
@@ -9751,8 +9754,7 @@ def render_bingo_board() -> None:
                         scoreboard=scoreboard,
                     )
 
-            if final_standings is not None:
-                # Game is over — replace the early header with the podium version.
+            if game_has_ended:
                 _render_bingo_header(
                     settings,
                     live_view=live_view and _bingo_supports_live_refresh(settings=settings),
