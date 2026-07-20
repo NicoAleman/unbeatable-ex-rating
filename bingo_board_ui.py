@@ -9575,7 +9575,7 @@ def _render_bingo_board_fragment(
             settings=settings,
         )
     _render_bingo_teams(teams)
-    if game_is_live and leaderboard_by_chart is not None:
+    if leaderboard_by_chart is not None:
         view_player = _resolve_bingo_view_player(teams)
         highlight_player_id = (
             view_player.player_id if view_player is not None else None
