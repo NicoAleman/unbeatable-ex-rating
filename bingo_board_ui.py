@@ -1504,7 +1504,7 @@ def _bingo_rest_claimed_watermark_css() -> str:
         content: "";
         position: absolute;
         inset: 0;
-        z-index: 1;
+        z-index: 0;
         pointer-events: none;
         background: {image} center / contain no-repeat;
         opacity: 0.02;
@@ -2904,12 +2904,16 @@ def build_bingo_board_css() -> str:
         pointer-events: none;
         box-sizing: border-box;
     }}
+    .bingo-cell-body {{
+        position: relative;
+        z-index: 2;
+    }}
     .bingo-line-svg {{
         position: absolute;
         inset: 0;
         width: 100%;
         height: 100%;
-        z-index: 3;
+        z-index: 1;
         pointer-events: none;
         overflow: visible;
         opacity: 1;
@@ -2921,7 +2925,7 @@ def build_bingo_board_css() -> str:
     }}
     .bingo-cell-top {{
         position: relative;
-        z-index: 4;
+        z-index: 2;
         background: transparent;
         min-height: 3.5rem;
         display: flex;
@@ -2934,7 +2938,7 @@ def build_bingo_board_css() -> str:
     }}
     .bingo-cell-bot {{
         position: relative;
-        z-index: 4;
+        z-index: 2;
         background: transparent;
         min-height: 2.15rem;
         display: flex;
@@ -2949,7 +2953,7 @@ def build_bingo_board_css() -> str:
         align-items: center;
         min-height: 4.25rem;
         padding-top: 0.15rem;
-        z-index: 4;
+        z-index: 2;
         pointer-events: none;
         background: transparent;
     }}
@@ -7404,7 +7408,7 @@ def _bingo_board_component_css(*, cols: int, rows: int) -> str:
     .bingo-board-root.has-player-data.is-detailed .bingo-cell:hover:has(.bingo-cell-player-view:not(:empty)) .bingo-cell-player-view {{
         opacity: 1;
         pointer-events: auto;
-        z-index: 1;
+        z-index: 2;
         display: grid;
         grid-template-rows: minmax(4.25rem, 1fr) minmax(2.15rem, auto);
     }}
@@ -7427,7 +7431,7 @@ def _bingo_board_component_css(*, cols: int, rows: int) -> str:
     }}
     .bingo-board-root.has-player-data:not(.is-detailed):not(.is-player-board) .bingo-cell:hover .bingo-cell-team-view {{
         position: relative;
-        z-index: 1;
+        z-index: 2;
         display: flex;
         flex-direction: column;
         flex: 1 1 auto;
@@ -7627,7 +7631,7 @@ def _bingo_board_component_css(*, cols: int, rows: int) -> str:
         inset: 0;
         width: 100%;
         height: 100%;
-        z-index: 3;
+        z-index: 1;
         pointer-events: none;
         overflow: visible;
         opacity: 1;
@@ -7638,9 +7642,14 @@ def _bingo_board_component_css(*, cols: int, rows: int) -> str:
         border: {DEFAULT_CELL_BORDER};
         cursor: default;
     }}
+    .bingo-cell-body {{
+        position: relative;
+        z-index: 2;
+        min-height: 0;
+    }}
     .bingo-cell-top, .bingo-cell-header, .bingo-cell-bot, .bingo-cell-mid {{
         position: relative;
-        z-index: 4;
+        z-index: 2;
         background: transparent;
     }}
     .bingo-cell-top {{
