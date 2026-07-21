@@ -808,6 +808,22 @@ st.markdown(
         color: #ffffff !important;
         opacity: 0.45 !important;
     }}
+    .st-key-tool-picker [data-testid="stLinkButton"] {{
+        width: auto !important;
+        margin: 0 !important;
+    }}
+    .st-key-tool-picker [data-testid="stLinkButton"] a {{
+        width: auto !important;
+        background-color: #008f68 !important;
+        border-color: #008f68 !important;
+        color: #ffffff !important;
+        text-decoration: none !important;
+    }}
+    .st-key-tool-picker [data-testid="stLinkButton"] a:hover {{
+        background-color: #007a58 !important;
+        border-color: #007a58 !important;
+        color: #ffffff !important;
+    }}
     .st-key-tool-picker [data-testid="stMarkdownContainer"] p {{
         margin: 0 !important;
         line-height: 2.4 !important;
@@ -1779,6 +1795,18 @@ def _go_to_bingo_page() -> None:
     st.rerun()
 
 
+ARCADE_DB_URL = "https://unbeatable-leaderboards.vercel.app/"
+
+
+def _render_arcade_db_button(*, key: str) -> None:
+    st.link_button(
+        "Arcade DB",
+        ARCADE_DB_URL,
+        key=key,
+        type="primary",
+    )
+
+
 def _render_page_header(
     title: str,
     subtitle: str,
@@ -1826,6 +1854,7 @@ def _render_main_tools_nav() -> None:
                         type="primary",
                     ):
                         _go_to_bingo_page()
+                    _render_arcade_db_button(key="nav-arcade-db-from-tools")
                 elif selected == "bingo":
                     if st.button(
                         "Keybind Configurator",
@@ -1839,6 +1868,7 @@ def _render_main_tools_nav() -> None:
                         type="primary",
                         disabled=True,
                     )
+                    _render_arcade_db_button(key="nav-arcade-db-from-bingo")
                 else:
                     if st.button(
                         "Keybind Configurator",
@@ -1852,6 +1882,7 @@ def _render_main_tools_nav() -> None:
                         type="primary",
                     ):
                         _go_to_bingo_page()
+                    _render_arcade_db_button(key="nav-arcade-db-fallback")
             else:
                 st.markdown("**Other Features:**")
                 if st.button(
@@ -1862,6 +1893,7 @@ def _render_main_tools_nav() -> None:
                     _go_to_keybind_page()
                 if st.button("Bingo", key="nav-bingo", type="primary"):
                     _go_to_bingo_page()
+                _render_arcade_db_button(key="nav-arcade-db")
 
         st.divider()
 
