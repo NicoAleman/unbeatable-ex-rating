@@ -871,6 +871,22 @@ def _rating_number_format(*, show_sign: bool = False) -> str:
 
 
 ACCURACY_COLUMN_CONFIG = st.column_config.NumberColumn(format="%.2f")
+POTENTIAL_GAINS_ACCURACY_COLUMN_CONFIG = st.column_config.TextColumn()
+
+
+def _potential_gain_accuracy_display(
+    entry,
+    *,
+    rating_attr: str,
+) -> str:
+    if entry.is_unplayed:
+        return "-"
+    value = (
+        entry.chart.ex_accuracy
+        if rating_attr == "ex_rating"
+        else entry.chart.standard_accuracy
+    )
+    return f"{value:.2f}"
 
 
 def _render_potential_gains_expander(
@@ -934,10 +950,9 @@ def _render_potential_gains_expander(
                     "Chart": format_song_display_name(entry.chart.song),
                     "Difficulty": format_difficulty_display_name(entry.chart.difficulty),
                     "Level": entry.chart.level,
-                    accuracy_column_label: (
-                        entry.chart.ex_accuracy
-                        if rating_attr == "ex_rating"
-                        else entry.chart.standard_accuracy
+                    accuracy_column_label: _potential_gain_accuracy_display(
+                        entry,
+                        rating_attr=rating_attr,
                     ),
                     potential_column_label: entry.potential_gain,
                 }
@@ -948,7 +963,7 @@ def _render_potential_gains_expander(
             height=min((len(gains) + 1) * TABLE_ROW_HEIGHT, LEADERBOARD_TABLE_HEIGHT),
             key=key,
             column_config={
-                accuracy_column_label: ACCURACY_COLUMN_CONFIG,
+                accuracy_column_label: POTENTIAL_GAINS_ACCURACY_COLUMN_CONFIG,
                 potential_column_label: st.column_config.NumberColumn(
                     format=_rating_number_format(show_sign=True)
                 ),

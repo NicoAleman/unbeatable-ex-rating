@@ -4,13 +4,17 @@ from pathlib import Path
 
 from dataclasses import dataclass
 
-from rating.constants import COMPLETION_BONUS, TOP_N
+from rating.chart_levels import load_chart_rating_levels, resolve_chart_rating_level
+from rating.constants import COMPLETION_BONUS, DEFAULT_MAX_SCORES_PATH, TOP_N
+from rating.data import load_critical_max_scores
+from rating.entries import split_chart_key
 from rating.formatting import (
     format_difficulty_display_name,
     format_rating_display,
     format_song_display_name,
 )
 from rating.formulas import compute_grade_bonus, song_star_rating
+from rating.level_overrides import resolve_chart_level
 from rating.models import ChartRating
 
 EX_BOARD_HEADERS = [
@@ -64,6 +68,59 @@ def perfect_chart_rating(level: int) -> float:
 class PotentialGain:
     chart: ChartRating
     potential_gain: float
+    is_unplayed: bool = False
+
+
+def _played_chart_keys(ratings: list[ChartRating]) -> set[str]:
+    return {f"{chart.song}/{chart.difficulty}".casefold() for chart in ratings}
+
+
+def unplayed_chart_ratings(
+    ratings: list[ChartRating],
+    *,
+    max_scores_path: Path = DEFAULT_MAX_SCORES_PATH,
+) -> list[ChartRating]:
+    """Build zero-score rows for rated arcade charts the player has not played."""
+    from rating.imported_players import resolve_max_score_chart_key
+
+    max_scores = load_critical_max_scores(max_scores_path)
+    chart_levels = load_chart_rating_levels()
+    played_keys = _played_chart_keys(ratings)
+
+    unplayed: list[ChartRating] = []
+    for chart_key in chart_levels:
+        if chart_key.casefold() in played_keys:
+            continue
+
+        level = resolve_chart_rating_level(chart_key, chart_levels)
+        if level is None or level <= 0:
+            continue
+        level = resolve_chart_level(chart_key, level)
+        if level <= 0:
+            continue
+
+        song, difficulty = split_chart_key(chart_key)
+        resolved_key = resolve_max_score_chart_key(song, difficulty, max_scores)
+        if resolved_key is None:
+            continue
+        critical_max = max_scores[resolved_key]
+
+        unplayed.append(
+            ChartRating(
+                song=song,
+                difficulty=difficulty,
+                level=level,
+                score=0,
+                max_score=critical_max,
+                standard_accuracy=0.0,
+                standard_grade="",
+                standard_rating=0.0,
+                ex_accuracy=0.0,
+                ex_grade="",
+                ex_rating=0.0,
+            )
+        )
+    return unplayed
 
 
 def potential_gains_from_perfect(
@@ -72,6 +129,8 @@ def potential_gains_from_perfect(
     top_n: int = TOP_N,
     level_cap: int = 25,
     target_accuracy: float = 100.0,
+    *,
+    max_scores_path: Path = DEFAULT_MAX_SCORES_PATH,
 ) -> list[PotentialGain]:
     """Charts that would add profile rating from a hypothetical score on that chart."""
     current_values = [getattr(chart, rating_attr) for chart in ratings]
@@ -91,6 +150,19 @@ def potential_gains_from_perfect(
         gain = _top_n_sum(modified_values, top_n) - current_total
         if gain > 0:
             gains.append(PotentialGain(chart=chart, potential_gain=gain))
+
+    for chart in unplayed_chart_ratings(ratings, max_scores_path=max_scores_path):
+        if chart.level > level_cap:
+            continue
+
+        target_rating = target_chart_rating(chart.level, target_accuracy)
+        modified_values = list(current_values)
+        modified_values.append(target_rating)
+        gain = _top_n_sum(modified_values, top_n) - current_total
+        if gain > 0:
+            gains.append(
+                PotentialGain(chart=chart, potential_gain=gain, is_unplayed=True)
+            )
 
     gains.sort(key=lambda entry: entry.potential_gain, reverse=True)
     return gains
