@@ -22,6 +22,7 @@ from rating import chart_levels as chart_levels_module
 from rating import data as data_module
 from rating import formatting as formatting_module
 from rating import imported_players as imported_players_module
+from rating import baseline_leaderboard as baseline_leaderboard_module
 from rating import ex_leaderboard_db as ex_leaderboard_db_module
 from rating import full_ex_submissions as full_ex_submissions_module
 from rating import leaderboard_activity as leaderboard_activity_module
@@ -46,7 +47,11 @@ importlib.reload(formatting_module)
 importlib.reload(board_module)
 importlib.reload(chart_levels_module)
 importlib.reload(imported_players_module)
+# Reload order matters: public_leaderboard imports baseline helpers added for
+# rebuild cutoffs. Reloading public without baseline leaves a stale module and
+# raises ImportError on Streamlit Cloud reruns after deploys.
 importlib.reload(ex_leaderboard_db_module)
+importlib.reload(baseline_leaderboard_module)
 importlib.reload(public_leaderboard_module)
 importlib.reload(full_ex_submissions_module)
 importlib.reload(leaderboard_activity_module)
