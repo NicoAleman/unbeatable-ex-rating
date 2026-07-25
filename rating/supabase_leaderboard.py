@@ -68,6 +68,90 @@ def load_updated_ratings_from_supabase(
     }
 
 
+def prune_updated_ratings_at_or_before(
+    cutoff_iso: str,
+    db_url: str | None = None,
+) -> int:
+    """Delete updated_ratings rows with last_updated <= cutoff (full-rebuild cleanup)."""
+    if not supabase_configured() and not db_url:
+        raise RuntimeError("Supabase is not configured.")
+
+    conn = _connect_postgres(db_url)
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    DELETE FROM updated_ratings
+                    WHERE last_updated <= %s::timestamptz
+                    """,
+                    (cutoff_iso,),
+                )
+                deleted = cur.rowcount
+        return int(deleted)
+    finally:
+        conn.close()
+
+
+def sync_top_scores_payload_to_supabase(
+    score_rows: list[tuple[str, str, str, int]],
+    db_url: str | None = None,
+    *,
+    source: str = SCORE_SOURCE_SEED,
+) -> dict[str, int]:
+    """Replace seed scores with the given (player_id, song, difficulty, score) rows.
+
+    Uses GREATEST on conflict so higher submission/in_game scores are preserved.
+    """
+    if not supabase_configured() and not db_url:
+        raise RuntimeError("Supabase is not configured.")
+
+    best: dict[tuple[str, str, str], int] = {}
+    for player_id, song, difficulty, score in score_rows:
+        key = (player_id, song, difficulty)
+        value = int(score)
+        prev = best.get(key)
+        if prev is None or value > prev:
+            best[key] = value
+
+    score_payload = [
+        (player_id, song, difficulty, score, source)
+        for (player_id, song, difficulty), score in sorted(best.items())
+    ]
+    player_ids = {row[0] for row in score_payload}
+
+    postgres = _connect_postgres(db_url)
+    with postgres:
+        with postgres.cursor() as cur:
+            cur.execute("DELETE FROM scores WHERE source = %s", (source,))
+            print(f"Cleared existing {source} scores from Supabase", file=sys.stderr)
+
+            for batch_index, batch in enumerate(_batched(score_payload), 1):
+                psycopg2.extras.execute_batch(
+                    cur,
+                    """
+                    INSERT INTO scores (player_id, song, difficulty, score, source)
+                    VALUES (%s, %s, %s, %s, %s)
+                    ON CONFLICT (player_id, song, difficulty) DO UPDATE SET
+                      score = GREATEST(scores.score, EXCLUDED.score),
+                      source = CASE
+                        WHEN EXCLUDED.score > scores.score THEN EXCLUDED.source
+                        ELSE scores.source
+                      END
+                    """,
+                    batch,
+                    page_size=BATCH_SIZE,
+                )
+                print(
+                    f"Inserted batch {batch_index} "
+                    f"({min(batch_index * BATCH_SIZE, len(score_payload))}/{len(score_payload)} scores)…",
+                    file=sys.stderr,
+                )
+        postgres.commit()
+
+    return {"players": len(player_ids), "scores": len(score_payload)}
+
+
 def load_submission_scores_from_supabase(
     db_url: str | None = None,
 ) -> list[dict[str, object]]:
