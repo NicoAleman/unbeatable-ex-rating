@@ -9,5 +9,4 @@ secrets/
 ex_rating_board.csv
 resources/Leaderboards_June27/
 resources/ex_rating_leaderboard.sqlite
-resources/ex_rating_rebuild_*/
 unbeatable-leaderboard-tools/

@@ -1,63 +1,22 @@
-from datetime import datetime
-
 from rating.board import competition_ranks_for_values
-from rating.baseline_leaderboard import (
-    BaselineLeaderboardEntry,
-    UpdatedRating,
-    load_baseline_leaderboard_csv,
-    load_baseline_rebuild_cutoff,
-    parse_iso_timestamp,
-)
+from rating.baseline_leaderboard import BaselineLeaderboardEntry, UpdatedRating, load_baseline_leaderboard_csv
 from rating.constants import EX_RATING_BASELINE_PATH
 from rating.ex_leaderboard_db import ExLeaderboardEntry
 from rating.supabase_config import supabase_configured
 from rating.supabase_leaderboard import load_updated_ratings_from_supabase
 
 
-def should_apply_updated_rating(
-    baseline_rating: float,
-    override: UpdatedRating,
-    *,
-    rebuild_cutoff: datetime | None = None,
-) -> bool:
-    """Decide whether a Supabase override should replace the baseline rating.
-
-    After a full baseline rebuild:
-    - Overrides with last_updated **after** the rebuild timestamp always apply
-      (new submissions since the rebuild).
-    - Older overrides apply only when they are **strictly greater** than baseline.
-      If baseline is greater or equal, the rebuilt baseline wins.
-    """
-    override_ts = parse_iso_timestamp(override.last_updated)
-    if (
-        rebuild_cutoff is not None
-        and override_ts is not None
-        and override_ts > rebuild_cutoff
-    ):
-        return True
-    return override.ex_rating > baseline_rating
-
-
 def merge_baseline_with_updated_ratings(
     baseline: list[BaselineLeaderboardEntry],
     updated_ratings: dict[str, UpdatedRating],
-    *,
-    rebuild_cutoff: datetime | None = None,
 ) -> list[BaselineLeaderboardEntry]:
     if not updated_ratings:
         return baseline
 
-    if rebuild_cutoff is None:
-        rebuild_cutoff = load_baseline_rebuild_cutoff()
-
     merged: list[BaselineLeaderboardEntry] = []
     for entry in baseline:
         override = updated_ratings.get(entry.player_id)
-        if override is None or not should_apply_updated_rating(
-            entry.ex_rating,
-            override,
-            rebuild_cutoff=rebuild_cutoff,
-        ):
+        if override is None:
             merged.append(entry)
             continue
         merged.append(

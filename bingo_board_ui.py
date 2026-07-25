@@ -1,4 +1,4 @@
-"""Bingo Board UI for Streamlit."""
+﻿"""Bingo Board UI for Streamlit."""
 
 from __future__ import annotations
 

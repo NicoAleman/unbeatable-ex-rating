@@ -11,14 +11,11 @@ The leaderboard uses a **hybrid model**:
 | Layer | Storage | Purpose |
 |---|---|---|
 | **Baseline** | `resources/ex_rating_baseline.csv` (in repo) | One row per player: `player_id`, display name, baseline EX rating, last updated |
-| **Baseline meta** | `resources/ex_rating_baseline_meta.json` | `last_full_rebuild` timestamp; overrides older than this are ignored when baseline ≥ override |
-| **Live overrides** | Supabase `updated_ratings` | Patches baseline when a player submits a **new** rating after the last full rebuild |
+| **Live overrides** | Supabase `updated_ratings` | Patches baseline ratings when a player submits a new rating |
 | **Chart scores** | Supabase `scores` | Per-chart Classic scores used to render rating boards for searchable players |
 | **Activity feed** | Supabase `leaderboard_activity` | Recent rating increases shown on the site |
 
-**Displayed leaderboard rank** = sort all baseline players by effective rating (post-rebuild override only when newer / strictly higher), then assign competition ranks (ties share a rank).
-
-For full UGS refresh / promote steps, see [`BASELINE_REBUILD.md`](BASELINE_REBUILD.md).
+**Displayed leaderboard rank** = sort all baseline players by effective rating (override if present), then assign competition ranks (ties share a rank).
 
 There is **no public HTTP REST API** for writes today. The Streamlit site and admin scripts connect to Supabase Postgres directly using a server-side connection string. A game mod should **not** embed database credentials; it calls the Render submission API described in [`SUBMISSION_BACKEND.md`](SUBMISSION_BACKEND.md).
 

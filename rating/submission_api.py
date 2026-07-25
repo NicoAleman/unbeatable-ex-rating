@@ -69,8 +69,10 @@ def get_effective_rating(player_id: str) -> tuple[float | None, str | None]:
         return None, "Player is not on the baseline leaderboard."
 
     overrides = load_updated_ratings_from_supabase()
-    merged = merge_baseline_with_updated_ratings([entry], overrides)
-    return merged[0].ex_rating, None
+    override = overrides.get(player_id)
+    if override is not None:
+        return override.ex_rating, None
+    return entry.ex_rating, None
 
 
 def get_previous_standard_rating(player_id: str) -> float:

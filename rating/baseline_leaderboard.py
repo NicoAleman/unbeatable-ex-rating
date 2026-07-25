@@ -1,17 +1,10 @@
 import csv
-import json
 import sys
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from io import StringIO
 from pathlib import Path
 
-from rating.constants import (
-    BASELINE_CSV_HEADERS,
-    EX_RATING_BASELINE_META_PATH,
-    EX_RATING_BASELINE_PATH,
-    EX_RATING_LEADERBOARD_DB_PATH,
-)
+from rating.constants import BASELINE_CSV_HEADERS, EX_RATING_BASELINE_PATH, EX_RATING_LEADERBOARD_DB_PATH
 from rating.ex_leaderboard_db import _connect as connect_sqlite
 
 
@@ -27,72 +20,6 @@ class BaselineLeaderboardEntry:
 class UpdatedRating:
     ex_rating: float
     last_updated: str
-
-
-@dataclass(frozen=True)
-class BaselineMeta:
-    last_full_rebuild: str
-    player_count: int = 0
-    source_rebuild_dir: str = ""
-
-
-def parse_iso_timestamp(value: str | None) -> datetime | None:
-    if not value:
-        return None
-    text = str(value).strip()
-    if not text:
-        return None
-    if text.endswith("Z"):
-        text = text[:-1] + "+00:00"
-    try:
-        parsed = datetime.fromisoformat(text)
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=timezone.utc)
-    return parsed
-
-
-def utc_now_iso() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S+00:00")
-
-
-def load_baseline_meta(path: Path = EX_RATING_BASELINE_META_PATH) -> BaselineMeta | None:
-    if not path.exists():
-        return None
-    try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
-    last_full_rebuild = str(raw.get("last_full_rebuild", "")).strip()
-    if not last_full_rebuild:
-        return None
-    return BaselineMeta(
-        last_full_rebuild=last_full_rebuild,
-        player_count=int(raw.get("player_count") or 0),
-        source_rebuild_dir=str(raw.get("source_rebuild_dir") or ""),
-    )
-
-
-def write_baseline_meta(
-    meta: BaselineMeta,
-    path: Path = EX_RATING_BASELINE_META_PATH,
-) -> None:
-    payload = {
-        "last_full_rebuild": meta.last_full_rebuild,
-        "player_count": meta.player_count,
-        "source_rebuild_dir": meta.source_rebuild_dir,
-    }
-    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
-
-
-def load_baseline_rebuild_cutoff(
-    path: Path = EX_RATING_BASELINE_META_PATH,
-) -> datetime | None:
-    meta = load_baseline_meta(path)
-    if meta is None:
-        return None
-    return parse_iso_timestamp(meta.last_full_rebuild)
 
 
 def load_baseline_leaderboard_csv(
