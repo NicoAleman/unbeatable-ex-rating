@@ -85,3 +85,21 @@ def compute_grade_bonus(acc_percent: float, miss_count: int, cleared: bool) -> i
     if grade in ("D", "HOW?"):
         return 10
     return 0
+
+
+def compute_ex_grade_bonus(ex_accuracy: float, cleared: bool) -> int:
+    """EX Rating bonus: +25 only above 90% EX Acc. Misses are ignored."""
+    if ex_accuracy > 90:
+        return 25
+
+    # Misses do not affect EX Rating; evaluate letter-grade bonuses miss-free.
+    grade = compute_standard_grade(ex_accuracy, miss_count=0, cleared=cleared)
+    if grade == "A":
+        return 20
+    if grade == "B":
+        return 15
+    if grade == "C":
+        return 12
+    if grade in ("D", "HOW?"):
+        return 10
+    return 0

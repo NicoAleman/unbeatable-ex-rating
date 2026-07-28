@@ -349,7 +349,7 @@ When accuracy metadata is omitted from stored scores, misses default to 0 and `c
 
 ### Step 3 — Grade bonus
 
-Same rules for standard and EX paths:
+**Standard Rating** (uses real misses):
 
 ```
 if accuracy > 90%:           bonus = 25
@@ -361,7 +361,18 @@ elif grade D or HOW?:         bonus = 10
 else:                         bonus = 0
 ```
 
-For EX Rating, `accuracy` in the above means **EX Accuracy**.
+**EX Rating** (misses ignored; no 89% near-threshold):
+
+```
+if EX Accuracy > 90%:        bonus = 25
+elif grade A:                 bonus = 20
+elif grade B:                 bonus = 15
+elif grade C:                 bonus = 12
+elif grade D or HOW?:         bonus = 10
+else:                         bonus = 0
+```
+
+Letter grades for the EX fallback are evaluated miss-free (as if miss_count = 0).
 
 ### Step 4 — Per-chart EX Rating
 
@@ -371,8 +382,7 @@ accPower = (EX Accuracy - 50)^1.12    // 0 if EX Accuracy ≤ 50
 EX Rating (chart) = (chart_level × (accPower + grade_bonus)) ÷ 5625
 ```
 
-`chart_level` from `chart_rating_levels.json`. EX grade bonus is based on
-EX Accuracy only (misses do not reduce EX rating).
+`chart_level` from `chart_rating_levels.json`.
 
 ### Step 5 — Player EX Rating
 

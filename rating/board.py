@@ -13,7 +13,7 @@ from rating.formatting import (
     format_rating_display,
     format_song_display_name,
 )
-from rating.formulas import compute_grade_bonus, song_star_rating
+from rating.formulas import compute_ex_grade_bonus, song_star_rating
 from rating.level_overrides import resolve_chart_level
 from rating.models import ChartRating
 
@@ -54,8 +54,8 @@ def _top_n_sum(values: list[float], n: int = TOP_N) -> float:
 
 
 def target_chart_rating(level: int, target_accuracy: float) -> float:
-    """Rating for a hypothetical score at target accuracy with no misses."""
-    bonus = compute_grade_bonus(target_accuracy, 0, True)
+    """Rating for a hypothetical score at target EX accuracy (misses ignored)."""
+    bonus = compute_ex_grade_bonus(target_accuracy, cleared=True)
     return song_star_rating(target_accuracy, level, bonus)
 
 
