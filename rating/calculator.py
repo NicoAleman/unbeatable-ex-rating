@@ -70,7 +70,8 @@ def rate_chart(
     ex_grade = compute_ex_grade(ex_accuracy, misses, cleared, criticals, max_combo)
 
     standard_bonus = compute_grade_bonus(standard_accuracy, misses, cleared)
-    ex_bonus = compute_grade_bonus(ex_accuracy, misses, cleared)
+    # EX rating is score-based only: miss count must not reduce the grade bonus.
+    ex_bonus = compute_grade_bonus(ex_accuracy, miss_count=0, cleared=cleared)
 
     return ChartRating(
         song=song,

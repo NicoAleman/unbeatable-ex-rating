@@ -371,7 +371,8 @@ accPower = (EX Accuracy - 50)^1.12    // 0 if EX Accuracy ≤ 50
 EX Rating (chart) = (chart_level × (accPower + grade_bonus)) ÷ 5625
 ```
 
-`chart_level` from `chart_rating_levels.json`, with manual overrides applied.
+`chart_level` from `chart_rating_levels.json`. EX grade bonus is based on
+EX Accuracy only (misses do not reduce EX rating).
 
 ### Step 5 — Player EX Rating
 
