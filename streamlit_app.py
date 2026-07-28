@@ -11,13 +11,13 @@ from zoneinfo import ZoneInfo
 
 import streamlit as st
 
-from rating import build_ratings, get_rating_boards
 from rating import constants as constants_module
 from rating.models import ChartRating
 
 importlib.reload(constants_module)
 
 from rating import board as board_module
+from rating import calculator as calculator_module
 from rating import chart_levels as chart_levels_module
 from rating import data as data_module
 from rating import formatting as formatting_module
@@ -26,6 +26,7 @@ from rating import baseline_leaderboard as baseline_leaderboard_module
 from rating import ex_leaderboard_db as ex_leaderboard_db_module
 from rating import full_ex_submissions as full_ex_submissions_module
 from rating import leaderboard_activity as leaderboard_activity_module
+from rating import level_overrides as level_overrides_module
 from rating import public_leaderboard as public_leaderboard_module
 from rating import supabase_leaderboard as supabase_leaderboard_module
 from rating.supabase_config import supabase_configured
@@ -44,8 +45,10 @@ import tools_page as tools_page_module
 
 importlib.reload(data_module)
 importlib.reload(formatting_module)
-importlib.reload(board_module)
+importlib.reload(level_overrides_module)
 importlib.reload(chart_levels_module)
+importlib.reload(calculator_module)
+importlib.reload(board_module)
 importlib.reload(imported_players_module)
 # Reload order matters: public_leaderboard imports baseline helpers added for
 # rebuild cutoffs. Reloading public without baseline leaves a stale module and
@@ -58,6 +61,9 @@ importlib.reload(leaderboard_activity_module)
 importlib.reload(supabase_leaderboard_module)
 importlib.reload(tools_page_module)
 from tools_page import render_other_tools_page
+
+build_ratings = calculator_module.build_ratings
+get_rating_boards = board_module.get_rating_boards
 
 COMPLETION_BONUS = constants_module.COMPLETION_BONUS
 DEFAULT_MAX_SCORES_PATH = constants_module.DEFAULT_MAX_SCORES_PATH
