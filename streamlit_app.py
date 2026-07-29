@@ -21,6 +21,7 @@ from rating import calculator as calculator_module
 from rating import chart_levels as chart_levels_module
 from rating import data as data_module
 from rating import formatting as formatting_module
+from rating import formulas as formulas_module
 from rating import imported_players as imported_players_module
 from rating import baseline_leaderboard as baseline_leaderboard_module
 from rating import ex_leaderboard_db as ex_leaderboard_db_module
@@ -47,6 +48,7 @@ importlib.reload(data_module)
 importlib.reload(formatting_module)
 importlib.reload(level_overrides_module)
 importlib.reload(chart_levels_module)
+importlib.reload(formulas_module)
 importlib.reload(calculator_module)
 importlib.reload(board_module)
 importlib.reload(imported_players_module)
