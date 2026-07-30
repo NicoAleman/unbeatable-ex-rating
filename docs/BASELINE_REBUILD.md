@@ -25,15 +25,19 @@ Promote flags:
 
 | Flag | Effect |
 |------|--------|
-| `--skip-db` | Only write CSV/meta; leave Supabase alone |
-| `--skip-score-seed` | Prune overrides, but do not replace `scores` seed rows |
+| `--skip-db` | Only write CSV/meta/top-scores; leave Supabase alone |
+| `--skip-prune` | Keep existing `updated_ratings` (still re-seeds scores unless skipped) |
+| `--skip-score-seed` | Do not replace `scores` seed rows |
 
 ## What promote does
 
 1. Writes `resources/ex_rating_baseline.csv` with **Last Updated = promote time** for every row
 2. Writes `resources/ex_rating_baseline_meta.json` with `last_full_rebuild`
-3. Deletes Supabase `updated_ratings` where `last_updated <= last_full_rebuild`
-4. Replaces Supabase `scores` rows with `source='seed'` from `top_1000_player_scores.json`
+3. Writes `resources/ex_rating_baseline_top_scores.json` (top-1000 chart scores for board merge)
+4. Deletes Supabase `updated_ratings` where `last_updated <= last_full_rebuild` (unless `--skip-prune`)
+5. Replaces Supabase `scores` rows with `source='seed'` from `top_1000_player_scores.json` using `GREATEST` (unless `--skip-score-seed`)
+
+Player score boards use **max(baseline top scores, Supabase)** per chart so a lower DB row cannot override a higher baseline score.
 
 ## How live ratings merge after a rebuild
 

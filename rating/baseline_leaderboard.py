@@ -10,6 +10,7 @@ from rating.constants import (
     BASELINE_CSV_HEADERS,
     EX_RATING_BASELINE_META_PATH,
     EX_RATING_BASELINE_PATH,
+    EX_RATING_BASELINE_TOP_SCORES_PATH,
     EX_RATING_LEADERBOARD_DB_PATH,
 )
 from rating.ex_leaderboard_db import _connect as connect_sqlite
@@ -177,3 +178,111 @@ def export_baseline_leaderboard_from_sqlite(
     write_baseline_leaderboard_csv(entries, output_path)
     print(f"Wrote {len(entries)} players to {output_path}", file=sys.stderr)
     return len(entries)
+
+
+def write_baseline_top_scores_from_rebuild(
+    rebuild_top_scores_path: Path,
+    output_path: Path = EX_RATING_BASELINE_TOP_SCORES_PATH,
+) -> int:
+    """Copy rebuild top-N score payload into the live baseline top-scores file."""
+    if not rebuild_top_scores_path.is_file():
+        raise FileNotFoundError(f"Missing rebuild top scores: {rebuild_top_scores_path}")
+    payload = json.loads(rebuild_top_scores_path.read_text(encoding="utf-8"))
+    by_player: dict[str, list[dict[str, object]]] = {}
+    for player in payload.get("players") or []:
+        player_id = str(player.get("player_id") or "").strip()
+        if not player_id:
+            continue
+        rows: list[dict[str, object]] = []
+        for score in player.get("scores") or []:
+            song = str(score.get("song") or "").strip()
+            difficulty = str(score.get("difficulty") or "").strip()
+            if not song or not difficulty:
+                continue
+            rows.append(
+                {
+                    "song": song,
+                    "difficulty": difficulty,
+                    "score": int(score["score"]),
+                }
+            )
+        if rows:
+            by_player[player_id] = rows
+    output_path.write_text(
+        json.dumps({"by_player": by_player}, separators=(",", ":")),
+        encoding="utf-8",
+    )
+    return len(by_player)
+
+
+def load_baseline_top_scores_for_player(
+    player_id: str,
+    path: Path = EX_RATING_BASELINE_TOP_SCORES_PATH,
+) -> list[dict[str, object]]:
+    if not player_id.strip() or not path.is_file():
+        return []
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    rows = (payload.get("by_player") or {}).get(player_id.strip()) or []
+    return [
+        {
+            "song": str(row.get("song") or "").strip(),
+            "difficulty": str(row.get("difficulty") or "").strip(),
+            "score": int(row["score"]),
+        }
+        for row in rows
+        if str(row.get("song") or "").strip() and str(row.get("difficulty") or "").strip()
+    ]
+
+
+def merge_score_rows_preferring_higher(
+    *sources: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    """Merge chart score rows, keeping the higher score per (song, difficulty).
+
+    When scores tie, prefer the row that has accuracy / judgement metadata.
+    """
+    best: dict[tuple[str, str], dict[str, object]] = {}
+
+    def _richness(row: dict[str, object]) -> int:
+        return sum(
+            1
+            for key in ("accuracy", "miss_count", "max_combo", "critical_count", "cleared")
+            if row.get(key) is not None
+        )
+
+    for rows in sources:
+        for row in rows:
+            song = str(row.get("song") or "").strip()
+            difficulty = str(row.get("difficulty") or "").strip()
+            if not song or not difficulty:
+                continue
+            try:
+                score = int(row["score"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            key = (song, difficulty)
+            prev = best.get(key)
+            if prev is None:
+                best[key] = dict(row)
+                best[key]["song"] = song
+                best[key]["difficulty"] = difficulty
+                best[key]["score"] = score
+                continue
+            prev_score = int(prev["score"])
+            if score > prev_score:
+                best[key] = dict(row)
+                best[key]["song"] = song
+                best[key]["difficulty"] = difficulty
+                best[key]["score"] = score
+            elif score == prev_score and _richness(row) > _richness(prev):
+                merged = dict(prev)
+                merged.update({k: v for k, v in row.items() if v is not None})
+                merged["song"] = song
+                merged["difficulty"] = difficulty
+                merged["score"] = score
+                best[key] = merged
+
+    return list(best.values())

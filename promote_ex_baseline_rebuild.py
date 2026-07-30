@@ -50,10 +50,12 @@ from rating.baseline_leaderboard import (  # noqa: E402
     utc_now_iso,
     write_baseline_leaderboard_csv,
     write_baseline_meta,
+    write_baseline_top_scores_from_rebuild,
 )
 from rating.constants import (  # noqa: E402
     EX_RATING_BASELINE_META_PATH,
     EX_RATING_BASELINE_PATH,
+    EX_RATING_BASELINE_TOP_SCORES_PATH,
     SCORE_SOURCE_SEED,
 )
 from rating.public_leaderboard import (  # noqa: E402
@@ -102,6 +104,7 @@ def promote(
     *,
     skip_db: bool = False,
     skip_score_seed: bool = False,
+    skip_prune: bool = False,
 ) -> dict:
     _ensure_db_url_from_secrets_toml()
     try:
@@ -133,11 +136,28 @@ def promote(
     print(f"Wrote baseline CSV ({len(stamped)} players) -> {EX_RATING_BASELINE_PATH}")
     print(f"Wrote baseline meta last_full_rebuild={now} -> {EX_RATING_BASELINE_META_PATH}")
 
+    top_scores_path = rebuild_dir / "top_1000_player_scores.json"
+    baseline_top_players = 0
+    if top_scores_path.is_file():
+        baseline_top_players = write_baseline_top_scores_from_rebuild(
+            top_scores_path,
+            EX_RATING_BASELINE_TOP_SCORES_PATH,
+        )
+        print(
+            f"Wrote baseline top scores ({baseline_top_players} players) -> "
+            f"{EX_RATING_BASELINE_TOP_SCORES_PATH}"
+        )
+    else:
+        print(f"WARNING: missing {top_scores_path}; skipped baseline top scores export")
+
     pruned = 0
     seeded = {"players": 0, "scores": 0}
     if not skip_db:
-        pruned = prune_updated_ratings_at_or_before(now)
-        print(f"Pruned updated_ratings at_or_before {now}: {pruned} rows")
+        if not skip_prune:
+            pruned = prune_updated_ratings_at_or_before(now)
+            print(f"Pruned updated_ratings at_or_before {now}: {pruned} rows")
+        else:
+            print("Skipped pruning updated_ratings (--skip-prune)")
 
         if not skip_score_seed:
             score_rows = _load_top_score_rows(rebuild_dir)
@@ -149,6 +169,8 @@ def promote(
                 f"Re-seeded top scores: players={seeded['players']} "
                 f"scores={seeded['scores']} source={SCORE_SOURCE_SEED}"
             )
+        else:
+            print("Skipped score seed (--skip-score-seed)")
     else:
         print("Skipped Supabase updates (--skip-db)")
 
@@ -167,12 +189,14 @@ def promote(
     return {
         "last_full_rebuild": now,
         "player_count": len(stamped),
+        "baseline_top_score_players": baseline_top_players,
         "pruned_updated_ratings": pruned,
         "seeded_players": seeded["players"],
         "seeded_scores": seeded["scores"],
         "remaining_overrides": remaining_overrides,
         "baseline_path": str(EX_RATING_BASELINE_PATH),
         "meta_path": str(EX_RATING_BASELINE_META_PATH),
+        "top_scores_path": str(EX_RATING_BASELINE_TOP_SCORES_PATH),
     }
 
 
@@ -187,7 +211,12 @@ def main() -> int:
     parser.add_argument(
         "--skip-db",
         action="store_true",
-        help="Only write baseline CSV/meta; do not touch Supabase",
+        help="Only write baseline CSV/meta/top-scores; do not touch Supabase",
+    )
+    parser.add_argument(
+        "--skip-prune",
+        action="store_true",
+        help="Keep existing updated_ratings rows (do not prune)",
     )
     parser.add_argument(
         "--skip-score-seed",
@@ -207,11 +236,12 @@ def main() -> int:
         rebuild_dir,
         skip_db=args.skip_db,
         skip_score_seed=args.skip_score_seed,
+        skip_prune=args.skip_prune,
     )
     print("\nPromote summary:")
     print(json.dumps(summary, indent=2))
     print(
-        "\nNext: commit/push baseline CSV + meta so Streamlit Cloud picks them up."
+        "\nNext: commit/push baseline CSV + meta (+ top scores) so Streamlit Cloud picks them up."
     )
     return 0
 

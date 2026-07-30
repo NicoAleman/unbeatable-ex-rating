@@ -12,7 +12,12 @@ from rating.constants import (
     TOP_SCORES_SYNC_PLAYER_COUNT,
 )
 from rating.ex_leaderboard_db import _connect as connect_sqlite
-from rating.baseline_leaderboard import UpdatedRating, load_baseline_leaderboard_csv
+from rating.baseline_leaderboard import (
+    UpdatedRating,
+    load_baseline_leaderboard_csv,
+    load_baseline_top_scores_for_player,
+    merge_score_rows_preferring_higher,
+)
 from rating.constants import EX_RATING_BASELINE_PATH
 from rating.imported_players import (
     build_ratings_from_stored_scores,
@@ -257,7 +262,10 @@ def load_player_ratings_from_supabase(
     player_id: str,
     db_url: str | None = None,
 ) -> tuple[list, bool]:
-    score_rows = load_player_scores_from_supabase(player_id, db_url=db_url)
+    """Build ratings from max(Supabase scores, baseline top scores) per chart."""
+    supabase_rows = load_player_scores_from_supabase(player_id, db_url=db_url)
+    baseline_rows = load_baseline_top_scores_for_player(player_id)
+    score_rows = merge_score_rows_preferring_higher(baseline_rows, supabase_rows)
     if not score_rows:
         return [], False
     return (
@@ -391,13 +399,42 @@ def submit_player_update_to_supabase(
                     )
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (player_id, song, difficulty) DO UPDATE SET
-                        score = EXCLUDED.score,
-                        source = EXCLUDED.source,
-                        accuracy = EXCLUDED.accuracy,
-                        miss_count = EXCLUDED.miss_count,
-                        max_combo = EXCLUDED.max_combo,
-                        cleared = EXCLUDED.cleared,
-                        critical_count = EXCLUDED.critical_count
+                        score = GREATEST(scores.score, EXCLUDED.score),
+                        source = CASE
+                            WHEN EXCLUDED.score > scores.score THEN EXCLUDED.source
+                            ELSE scores.source
+                        END,
+                        accuracy = CASE
+                            WHEN EXCLUDED.score > scores.score THEN EXCLUDED.accuracy
+                            WHEN EXCLUDED.score = scores.score
+                                AND EXCLUDED.accuracy IS NOT NULL THEN EXCLUDED.accuracy
+                            ELSE scores.accuracy
+                        END,
+                        miss_count = CASE
+                            WHEN EXCLUDED.score > scores.score THEN EXCLUDED.miss_count
+                            WHEN EXCLUDED.score = scores.score
+                                AND EXCLUDED.miss_count IS NOT NULL THEN EXCLUDED.miss_count
+                            ELSE scores.miss_count
+                        END,
+                        max_combo = CASE
+                            WHEN EXCLUDED.score > scores.score THEN EXCLUDED.max_combo
+                            WHEN EXCLUDED.score = scores.score
+                                AND EXCLUDED.max_combo IS NOT NULL THEN EXCLUDED.max_combo
+                            ELSE scores.max_combo
+                        END,
+                        cleared = CASE
+                            WHEN EXCLUDED.score > scores.score THEN EXCLUDED.cleared
+                            WHEN EXCLUDED.score = scores.score
+                                AND EXCLUDED.cleared IS NOT NULL THEN EXCLUDED.cleared
+                            ELSE scores.cleared
+                        END,
+                        critical_count = CASE
+                            WHEN EXCLUDED.score > scores.score THEN EXCLUDED.critical_count
+                            WHEN EXCLUDED.score = scores.score
+                                AND EXCLUDED.critical_count IS NOT NULL
+                                THEN EXCLUDED.critical_count
+                            ELSE scores.critical_count
+                        END
                     """,
                     batch,
                     page_size=BATCH_SIZE,

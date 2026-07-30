@@ -16,6 +16,9 @@ RATING_OVERRIDES_PATH = PROJECT_ROOT / "resources" / "rating_overrides.json"
 REWIRED_KEYBOARD_IDENTIFIERS_PATH = PROJECT_ROOT / "resources" / "RewiredKeyboardElementIdentifiers.csv"
 EX_RATING_BASELINE_PATH = PROJECT_ROOT / "resources" / "ex_rating_baseline.csv"
 EX_RATING_BASELINE_META_PATH = PROJECT_ROOT / "resources" / "ex_rating_baseline_meta.json"
+EX_RATING_BASELINE_TOP_SCORES_PATH = (
+    PROJECT_ROOT / "resources" / "ex_rating_baseline_top_scores.json"
+)
 FULL_EX_RATING_LEADERBOARD_PATH = EX_RATING_BASELINE_PATH
 SHARED_EX_RANKINGS_PATH = PROJECT_ROOT / "resources" / "shared_ex_rankings.json"
 GOOGLE_SHEET_ID = "16fpprBB4ynYxYFgoqnAlqmUCvXiEqRz-LgvivjvK_J0"
