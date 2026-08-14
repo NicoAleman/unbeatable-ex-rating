@@ -24,7 +24,8 @@ from rating.models import ChartRating
 def ex_accuracy_percent(score: int, max_score: int) -> float:
     if max_score <= 0:
         return 0.0
-    return (score / max_score) * 100
+    # UGS occasionally returns impossible scores above critical max; never rate above 100%.
+    return min((score / max_score) * 100, 100.0)
 
 
 def _resolve_rating_level(
