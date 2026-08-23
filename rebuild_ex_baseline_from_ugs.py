@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import csv
 import json
+import shutil
 import sys
 import time
 import urllib.error
@@ -87,12 +88,14 @@ def request_page(board_id: str, token: str, offset: int) -> tuple[dict, str]:
     raise RuntimeError("unreachable")
 
 
-def list_rateable_boards() -> list[dict]:
+def list_rateable_boards(*, min_level: int | None = None) -> list[dict]:
     levels = load_chart_rating_levels(CHART_RATING_LEVELS_PATH)
     boards: list[dict] = []
     seen: set[str] = set()
     for chart_key, level in levels.items():
         if "/" not in chart_key:
+            continue
+        if min_level is not None and int(level) < min_level:
             continue
         song, difficulty = chart_key.rsplit("/", 1)
         try:
@@ -111,10 +114,33 @@ def list_rateable_boards() -> list[dict]:
                 "chart_key": chart_key,
             }
         )
+    boards.sort(key=lambda b: (-int(b["level"]), b["chart_key"]))
     return boards
 
 
-def fetch_board(board: dict, token: str, out_path: Path) -> tuple[str, str, str | None]:
+def _board_fetch_complete(
+    existing: list,
+    total: int | None,
+    *,
+    complete_flag: bool,
+    per_chart_limit: int | None,
+) -> bool:
+    if per_chart_limit is not None and len(existing) >= per_chart_limit:
+        return True
+    if complete_flag:
+        return True
+    if total is not None and len(existing) >= total:
+        return True
+    return False
+
+
+def fetch_board(
+    board: dict,
+    token: str,
+    out_path: Path,
+    *,
+    per_chart_limit: int | None = None,
+) -> tuple[str, str, str | None]:
     """Returns (status, token, error). status: complete | not_found | error"""
     existing: list = []
     total: int | None = None
@@ -123,7 +149,26 @@ def fetch_board(board: dict, token: str, out_path: Path) -> tuple[str, str, str 
             data = json.loads(out_path.read_text(encoding="utf-8"))
             existing = list(data.get("results") or [])
             total = data.get("total")
-            if data.get("complete") or (total is not None and len(existing) >= total):
+            if _board_fetch_complete(
+                existing,
+                total,
+                complete_flag=bool(data.get("complete")),
+                per_chart_limit=per_chart_limit,
+            ):
+                if per_chart_limit is not None and len(existing) > per_chart_limit:
+                    existing = existing[:per_chart_limit]
+                    payload = {
+                        **board,
+                        "speed": SPEED,
+                        "region": REGION,
+                        "fetched_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                        "total": total,
+                        "returned": len(existing),
+                        "complete": True,
+                        "per_chart_limit": per_chart_limit,
+                        "results": existing,
+                    }
+                    out_path.write_text(json.dumps(payload), encoding="utf-8")
                 return "complete", token, None
         except json.JSONDecodeError:
             existing = []
@@ -146,13 +191,21 @@ def fetch_board(board: dict, token: str, out_path: Path) -> tuple[str, str, str 
                         "total": total if total is not None else 0,
                         "returned": 0,
                         "complete": True,
+                        "per_chart_limit": per_chart_limit,
                         "results": [],
                     }
                     out_path.write_text(json.dumps(payload), encoding="utf-8")
                 break
             existing.extend(batch)
+            if per_chart_limit is not None and len(existing) > per_chart_limit:
+                existing = existing[:per_chart_limit]
             offset = len(existing)
-            complete = bool(total is not None and len(existing) >= total) or len(batch) < PAGE_LIMIT
+            hit_limit = per_chart_limit is not None and len(existing) >= per_chart_limit
+            complete = (
+                hit_limit
+                or bool(total is not None and len(existing) >= total)
+                or len(batch) < PAGE_LIMIT
+            )
             payload = {
                 **board,
                 "speed": SPEED,
@@ -161,6 +214,7 @@ def fetch_board(board: dict, token: str, out_path: Path) -> tuple[str, str, str 
                 "total": total,
                 "returned": len(existing),
                 "complete": complete,
+                "per_chart_limit": per_chart_limit,
                 "results": existing,
             }
             out_path.write_text(json.dumps(payload), encoding="utf-8")
@@ -176,9 +230,15 @@ def fetch_board(board: dict, token: str, out_path: Path) -> tuple[str, str, str 
         return "error", token, str(exc)
 
 
-def fetch_all_ugs_charts(charts_dir: Path, manifest_path: Path) -> dict:
+def fetch_all_ugs_charts(
+    charts_dir: Path,
+    manifest_path: Path,
+    *,
+    min_level: int | None = None,
+    per_chart_limit: int | None = None,
+) -> dict:
     charts_dir.mkdir(parents=True, exist_ok=True)
-    boards = list_rateable_boards()
+    boards = list_rateable_boards(min_level=min_level)
     manifest = {"boards": {}, "speed": SPEED, "region": REGION}
     if manifest_path.is_file():
         try:
@@ -186,9 +246,13 @@ def fetch_all_ugs_charts(charts_dir: Path, manifest_path: Path) -> dict:
             manifest.setdefault("boards", {})
         except json.JSONDecodeError:
             pass
+    manifest["min_level"] = min_level
+    manifest["per_chart_limit"] = per_chart_limit
 
     token = authenticate_anonymous()
-    print(f"UGS boards to fetch: {len(boards)}", flush=True)
+    scope = f"level>={min_level}" if min_level is not None else "all levels"
+    limit_txt = f", top {per_chart_limit}/chart" if per_chart_limit is not None else ""
+    print(f"UGS boards to fetch: {len(boards)} ({scope}{limit_txt})", flush=True)
     complete = skipped = not_found = failed = 0
     start = time.perf_counter()
 
@@ -201,10 +265,29 @@ def fetch_all_ugs_charts(charts_dir: Path, manifest_path: Path) -> dict:
             if entry.get("status") == "complete" and out_path.is_file():
                 try:
                     data = json.loads(out_path.read_text(encoding="utf-8"))
-                    if data.get("complete") or (
-                        data.get("total") is not None
-                        and len(data.get("results") or []) >= data["total"]
+                    existing = list(data.get("results") or [])
+                    if _board_fetch_complete(
+                        existing,
+                        data.get("total"),
+                        complete_flag=bool(data.get("complete")),
+                        per_chart_limit=per_chart_limit,
                     ):
+                        if per_chart_limit is not None and len(existing) > per_chart_limit:
+                            # Old full dump: trim to requested top-N without re-fetch.
+                            existing = existing[:per_chart_limit]
+                            data = {
+                                **board,
+                                "speed": SPEED,
+                                "region": REGION,
+                                "fetched_at": data.get("fetched_at")
+                                or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                                "total": data.get("total"),
+                                "returned": len(existing),
+                                "complete": True,
+                                "per_chart_limit": per_chart_limit,
+                                "results": existing,
+                            }
+                            out_path.write_text(json.dumps(data), encoding="utf-8")
                         skipped += 1
                         if i % 50 == 0 or i == len(boards):
                             print(f"[{i}/{len(boards)}] skipped (already complete)", flush=True)
@@ -215,8 +298,13 @@ def fetch_all_ugs_charts(charts_dir: Path, manifest_path: Path) -> dict:
                 skipped += 1
                 continue
 
-        print(f"[{i}/{len(boards)}] {board['leaderboard_id']} ...", flush=True)
-        status, token, err = fetch_board(board, token, out_path)
+        print(
+            f"[{i}/{len(boards)}] lv{board['level']} {board['chart_key']} ...",
+            flush=True,
+        )
+        status, token, err = fetch_board(
+            board, token, out_path, per_chart_limit=per_chart_limit
+        )
         manifest["boards"][board["leaderboard_id"]] = {
             "song": board["song"],
             "difficulty": board["difficulty"],
@@ -237,6 +325,8 @@ def fetch_all_ugs_charts(charts_dir: Path, manifest_path: Path) -> dict:
     elapsed = time.perf_counter() - start
     summary = {
         "board_count": len(boards),
+        "min_level": min_level,
+        "per_chart_limit": per_chart_limit,
         "newly_complete": complete,
         "skipped": skipped,
         "not_found": not_found,
@@ -599,6 +689,29 @@ def main() -> int:
     parser.add_argument("--skip-fetch", action="store_true", help="Reuse existing ugs_charts/")
     parser.add_argument("--output", type=Path, default=None)
     parser.add_argument("--top-n", type=int, default=TOP_SCORES_SYNC_PLAYER_COUNT)
+    parser.add_argument(
+        "--min-level",
+        type=int,
+        default=None,
+        help="Only fetch UGS boards for charts at this rating level or higher",
+    )
+    parser.add_argument(
+        "--per-chart-limit",
+        type=int,
+        default=None,
+        help="Only keep/fetch the top N scores per chart (e.g. 1000)",
+    )
+    parser.add_argument(
+        "--seed-charts-from",
+        type=Path,
+        default=None,
+        help="Copy ugs_charts/ from a prior rebuild before fetching (keeps charts outside --min-level)",
+    )
+    parser.add_argument(
+        "--refetch-matching",
+        action="store_true",
+        help="Delete existing chart dumps for boards in this fetch scope so they are re-pulled",
+    )
     args = parser.parse_args()
 
     out = args.output or output_dir()
@@ -608,8 +721,51 @@ def main() -> int:
 
     print(f"Output: {out}", flush=True)
 
+    if args.seed_charts_from is not None and not args.skip_fetch:
+        seed = args.seed_charts_from
+        seed_charts = seed / "ugs_charts" if seed.name != "ugs_charts" else seed
+        if not seed_charts.is_dir():
+            print(f"ERROR: --seed-charts-from has no ugs_charts/: {seed}", file=sys.stderr)
+            return 1
+        if charts_dir.exists():
+            print(f"Seed target already has ugs_charts/; leaving in place: {charts_dir}", flush=True)
+        else:
+            print(f"Seeding ugs_charts/ from {seed_charts} ...", flush=True)
+            shutil.copytree(seed_charts, charts_dir)
+        seed_manifest = seed / "fetch_manifest.json"
+        if seed_manifest.is_file() and not manifest_path.is_file():
+            shutil.copy2(seed_manifest, manifest_path)
+
     if not args.skip_fetch:
-        fetch_all_ugs_charts(charts_dir, manifest_path)
+        if args.refetch_matching:
+            boards = list_rateable_boards(min_level=args.min_level)
+            cleared = 0
+            manifest = {"boards": {}}
+            if manifest_path.is_file():
+                try:
+                    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                    manifest.setdefault("boards", {})
+                except json.JSONDecodeError:
+                    pass
+            for board in boards:
+                board_id = board["leaderboard_id"]
+                path = charts_dir / f"{board_id}.json"
+                if path.is_file():
+                    path.unlink()
+                    cleared += 1
+                manifest.get("boards", {}).pop(board_id, None)
+            manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+            print(
+                f"Cleared {cleared} chart dumps for refetch "
+                f"(min_level={args.min_level})",
+                flush=True,
+            )
+        fetch_all_ugs_charts(
+            charts_dir,
+            manifest_path,
+            min_level=args.min_level,
+            per_chart_limit=args.per_chart_limit,
+        )
     elif not charts_dir.is_dir():
         print(f"ERROR: --skip-fetch but {charts_dir} missing", file=sys.stderr)
         return 1
