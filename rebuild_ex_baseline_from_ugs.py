@@ -88,16 +88,23 @@ def request_page(board_id: str, token: str, offset: int) -> tuple[dict, str]:
     raise RuntimeError("unreachable")
 
 
-def list_rateable_boards(*, min_level: int | None = None) -> list[dict]:
+def list_rateable_boards(
+    *,
+    min_level: int | None = None,
+    songs: set[str] | None = None,
+) -> list[dict]:
     levels = load_chart_rating_levels(CHART_RATING_LEVELS_PATH)
     boards: list[dict] = []
     seen: set[str] = set()
+    song_filter = {s.casefold() for s in songs} if songs else None
     for chart_key, level in levels.items():
         if "/" not in chart_key:
             continue
         if min_level is not None and int(level) < min_level:
             continue
         song, difficulty = chart_key.rsplit("/", 1)
+        if song_filter is not None and song.casefold() not in song_filter:
+            continue
         try:
             board_id = song_to_leaderboard_id(song, difficulty, SPEED, REGION)
         except ValueError:
@@ -236,9 +243,10 @@ def fetch_all_ugs_charts(
     *,
     min_level: int | None = None,
     per_chart_limit: int | None = None,
+    songs: set[str] | None = None,
 ) -> dict:
     charts_dir.mkdir(parents=True, exist_ok=True)
-    boards = list_rateable_boards(min_level=min_level)
+    boards = list_rateable_boards(min_level=min_level, songs=songs)
     manifest = {"boards": {}, "speed": SPEED, "region": REGION}
     if manifest_path.is_file():
         try:
@@ -248,11 +256,19 @@ def fetch_all_ugs_charts(
             pass
     manifest["min_level"] = min_level
     manifest["per_chart_limit"] = per_chart_limit
+    if songs:
+        manifest["songs"] = sorted(songs)
 
     token = authenticate_anonymous()
-    scope = f"level>={min_level}" if min_level is not None else "all levels"
-    limit_txt = f", top {per_chart_limit}/chart" if per_chart_limit is not None else ""
-    print(f"UGS boards to fetch: {len(boards)} ({scope}{limit_txt})", flush=True)
+    scope_bits = []
+    if min_level is not None:
+        scope_bits.append(f"level>={min_level}")
+    if songs:
+        scope_bits.append(f"{len(songs)} songs")
+    if not scope_bits:
+        scope_bits.append("all levels")
+    limit_txt = f", top {per_chart_limit}/chart" if per_chart_limit is not None else ", full boards"
+    print(f"UGS boards to fetch: {len(boards)} ({', '.join(scope_bits)}{limit_txt})", flush=True)
     complete = skipped = not_found = failed = 0
     start = time.perf_counter()
 
@@ -327,6 +343,7 @@ def fetch_all_ugs_charts(
         "board_count": len(boards),
         "min_level": min_level,
         "per_chart_limit": per_chart_limit,
+        "songs": sorted(songs) if songs else None,
         "newly_complete": complete,
         "skipped": skipped,
         "not_found": not_found,
@@ -712,7 +729,15 @@ def main() -> int:
         action="store_true",
         help="Delete existing chart dumps for boards in this fetch scope so they are re-pulled",
     )
+    parser.add_argument(
+        "--songs",
+        nargs="+",
+        default=None,
+        help="Only fetch these song ids (exact ArcadeMaxScores song keys)",
+    )
     args = parser.parse_args()
+
+    songs = set(args.songs) if args.songs else None
 
     out = args.output or output_dir()
     out.mkdir(parents=True, exist_ok=True)
@@ -738,7 +763,7 @@ def main() -> int:
 
     if not args.skip_fetch:
         if args.refetch_matching:
-            boards = list_rateable_boards(min_level=args.min_level)
+            boards = list_rateable_boards(min_level=args.min_level, songs=songs)
             cleared = 0
             manifest = {"boards": {}}
             if manifest_path.is_file():
@@ -757,7 +782,7 @@ def main() -> int:
             manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
             print(
                 f"Cleared {cleared} chart dumps for refetch "
-                f"(min_level={args.min_level})",
+                f"(min_level={args.min_level}, songs={len(songs) if songs else 'all'})",
                 flush=True,
             )
         fetch_all_ugs_charts(
@@ -765,6 +790,7 @@ def main() -> int:
             manifest_path,
             min_level=args.min_level,
             per_chart_limit=args.per_chart_limit,
+            songs=songs,
         )
     elif not charts_dir.is_dir():
         print(f"ERROR: --skip-fetch but {charts_dir} missing", file=sys.stderr)
