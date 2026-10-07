@@ -63,10 +63,17 @@ def output_dir() -> Path:
     return PROJECT_ROOT / "resources" / f"ex_rating_rebuild_{_stamp()}"
 
 
-def request_page(board_id: str, token: str, offset: int) -> tuple[dict, str]:
+def request_page(
+    board_id: str,
+    token: str,
+    offset: int,
+    *,
+    include_metadata: bool = True,
+) -> tuple[dict, str]:
+    meta = "true" if include_metadata else "false"
     url = (
         f"{LEADERBOARDS_BASE}/{PROJECT_ID}/leaderboards/{board_id}/scores"
-        f"?offset={offset}&limit={PAGE_LIMIT}&includeMetadata=false"
+        f"?offset={offset}&limit={PAGE_LIMIT}&includeMetadata={meta}"
     )
     for attempt in range(6):
         req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
@@ -147,6 +154,7 @@ def fetch_board(
     out_path: Path,
     *,
     per_chart_limit: int | None = None,
+    include_metadata: bool = True,
 ) -> tuple[str, str, str | None]:
     """Returns (status, token, error). status: complete | not_found | error"""
     existing: list = []
@@ -173,6 +181,7 @@ def fetch_board(
                         "returned": len(existing),
                         "complete": True,
                         "per_chart_limit": per_chart_limit,
+                        "include_metadata": include_metadata,
                         "results": existing,
                     }
                     out_path.write_text(json.dumps(payload), encoding="utf-8")
@@ -183,7 +192,12 @@ def fetch_board(
     offset = len(existing)
     try:
         while True:
-            page, token = request_page(board["leaderboard_id"], token, offset)
+            page, token = request_page(
+                board["leaderboard_id"],
+                token,
+                offset,
+                include_metadata=include_metadata,
+            )
             batch = page.get("results") or []
             if page.get("total") is not None:
                 total = page.get("total")
@@ -199,6 +213,7 @@ def fetch_board(
                         "returned": 0,
                         "complete": True,
                         "per_chart_limit": per_chart_limit,
+                        "include_metadata": include_metadata,
                         "results": [],
                     }
                     out_path.write_text(json.dumps(payload), encoding="utf-8")
@@ -222,6 +237,7 @@ def fetch_board(
                 "returned": len(existing),
                 "complete": complete,
                 "per_chart_limit": per_chart_limit,
+                "include_metadata": include_metadata,
                 "results": existing,
             }
             out_path.write_text(json.dumps(payload), encoding="utf-8")
@@ -244,6 +260,7 @@ def fetch_all_ugs_charts(
     min_level: int | None = None,
     per_chart_limit: int | None = None,
     songs: set[str] | None = None,
+    include_metadata: bool = True,
 ) -> dict:
     charts_dir.mkdir(parents=True, exist_ok=True)
     boards = list_rateable_boards(min_level=min_level, songs=songs)
@@ -256,6 +273,7 @@ def fetch_all_ugs_charts(
             pass
     manifest["min_level"] = min_level
     manifest["per_chart_limit"] = per_chart_limit
+    manifest["include_metadata"] = include_metadata
     if songs:
         manifest["songs"] = sorted(songs)
 
@@ -319,7 +337,11 @@ def fetch_all_ugs_charts(
             flush=True,
         )
         status, token, err = fetch_board(
-            board, token, out_path, per_chart_limit=per_chart_limit
+            board,
+            token,
+            out_path,
+            per_chart_limit=per_chart_limit,
+            include_metadata=include_metadata,
         )
         manifest["boards"][board["leaderboard_id"]] = {
             "song": board["song"],
@@ -343,6 +365,7 @@ def fetch_all_ugs_charts(
         "board_count": len(boards),
         "min_level": min_level,
         "per_chart_limit": per_chart_limit,
+        "include_metadata": include_metadata,
         "songs": sorted(songs) if songs else None,
         "newly_complete": complete,
         "skipped": skipped,
@@ -360,8 +383,28 @@ def fetch_all_ugs_charts(
     return manifest
 
 
+def _entry_platform_name(entry: dict) -> str:
+    """Steam / console gamertag from UGS score metadata (same source as original baseline)."""
+    meta = entry.get("metadata")
+    if isinstance(meta, str):
+        try:
+            meta = json.loads(meta)
+        except json.JSONDecodeError:
+            meta = None
+    if isinstance(meta, dict):
+        name = meta.get("playerPlatformName")
+        if isinstance(name, str) and name.strip():
+            return name.strip()
+    return ""
+
+
+def _looks_like_unity_default_name(name: str) -> bool:
+    # e.g. CreativeHurriedPorcupine#50959 / JoyfulClingingGong#4
+    return bool(name) and "#" in name and name.rsplit("#", 1)[-1].isdigit()
+
+
 def build_player_scores_from_charts(charts_dir: Path) -> dict[str, dict]:
-    """player_id -> {playerId, playerName, scores: [...]}"""
+    """player_id -> {playerId, playerName, platformName, scores: [...]}"""
     players: dict[str, dict] = {}
     chart_files = sorted(p for p in charts_dir.glob("*.json") if p.name != "manifest.json")
     print(f"Building player scores from {len(chart_files)} chart files...", flush=True)
@@ -376,16 +419,34 @@ def build_player_scores_from_charts(charts_dir: Path) -> dict[str, dict]:
             if not pid:
                 continue
             score = int(entry.get("score") or 0)
+            platform_name = _entry_platform_name(entry)
+            ugs_name = (entry.get("playerName") or "").strip()
             rec = players.get(pid)
             if rec is None:
                 rec = {
                     "playerId": pid,
-                    "playerName": entry.get("playerName") or "",
+                    "playerName": ugs_name,
+                    "platformName": platform_name,
                     "scores_by_chart": {},
                 }
                 players[pid] = rec
-            elif entry.get("playerName") and not rec.get("playerName"):
-                rec["playerName"] = entry["playerName"]
+            else:
+                if ugs_name and (
+                    not rec.get("playerName")
+                    or (
+                        _looks_like_unity_default_name(rec["playerName"])
+                        and not _looks_like_unity_default_name(ugs_name)
+                    )
+                ):
+                    rec["playerName"] = ugs_name
+                if platform_name and (
+                    not rec.get("platformName")
+                    or (
+                        _looks_like_unity_default_name(rec["platformName"])
+                        and not _looks_like_unity_default_name(platform_name)
+                    )
+                ):
+                    rec["platformName"] = platform_name
 
             key = (song, difficulty)
             prev = rec["scores_by_chart"].get(key)
@@ -482,6 +543,7 @@ def merge_db_scores(
             rec = {
                 "playerId": player_id,
                 "playerName": "",
+                "platformName": "",
                 "scores_by_chart": {},
             }
             players[player_id] = rec
@@ -528,7 +590,12 @@ def load_display_names() -> dict[str, str]:
     return names
 
 
-def rate_players(players: dict[str, dict], display_names: dict[str, str]) -> list[dict]:
+def rate_players(
+    players: dict[str, dict],
+    display_names: dict[str, str],
+    *,
+    prefer_score_names: bool = True,
+) -> list[dict]:
     print(f"Rating {len(players)} players...", flush=True)
     chart_levels = load_chart_rating_levels()
     results: list[dict] = []
@@ -539,12 +606,26 @@ def rate_players(players: dict[str, dict], display_names: dict[str, str]) -> lis
         if not ratings:
             continue
         ex_rating = player_ex_rating_with_completion(ratings)
-        display = (
-            display_names.get(pid)
-            or rec.get("displayName")
-            or rec.get("playerName")
-            or pid
-        )
+        platform = (rec.get("platformName") or "").strip()
+        ugs_name = (rec.get("playerName") or "").strip()
+        baseline_name = (display_names.get(pid) or "").strip()
+        if prefer_score_names:
+            # Prefer Steam/gamertag from score metadata (original baseline source).
+            display = (
+                platform
+                or (ugs_name if ugs_name and not _looks_like_unity_default_name(ugs_name) else "")
+                or baseline_name
+                or ugs_name
+                or pid
+            )
+        else:
+            display = (
+                baseline_name
+                or platform
+                or rec.get("displayName")
+                or ugs_name
+                or pid
+            )
         results.append(
             {
                 "player_id": pid,
@@ -791,6 +872,7 @@ def main() -> int:
             min_level=args.min_level,
             per_chart_limit=args.per_chart_limit,
             songs=songs,
+            include_metadata=True,
         )
     elif not charts_dir.is_dir():
         print(f"ERROR: --skip-fetch but {charts_dir} missing", file=sys.stderr)
@@ -802,7 +884,8 @@ def main() -> int:
     print(f"DB merge: replaced_higher={replaced} added_only_in_db={added}", flush=True)
 
     display_names = load_display_names()
-    results = rate_players(players, display_names)
+    # Prefer Steam/gamertag from UGS score metadata over stale baseline Unity names.
+    results = rate_players(players, display_names, prefer_score_names=True)
     last_updated = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S+00:00")
 
     baseline_path = out / "ex_rating_baseline.csv"
